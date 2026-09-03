@@ -20,7 +20,8 @@
     scramblers, interleavers, forward error correction, frame structure,
     CRCs and payloads using GF(2) rank analysis.</p>
     <p>
-      <a class="btn" href="viewer.html">Open the report viewer</a>
+      <a class="btn" href="analyze.html">Analyse a .wav / .iq recording</a>
+      <a class="btn alt" href="viewer.html">Open the report viewer</a>
       <a class="btn alt" href="viewer.html?demo=1">View a demo analysis</a>
       <a class="btn alt" href="https://github.com/BhoomiAgrawal12/SignalProcessing">Source on GitHub</a>
     </p>
@@ -63,8 +64,13 @@
   -> blind FEC identification -> framing -> CRC -> payload
   -> analyst report (JSON / CSV / PDF / SigMF / GRC)</pre>
     <p>The desktop application (PyQt6) and the CLI share one analysis
-    engine. This site hosts the project overview and a browser-based
-    viewer for exported analysis reports.</p>
+    engine. This site additionally runs the front half of that pipeline
+    (S0-S5: ingestion, format sniffing, conditioning, detection, parameter
+    estimation, modulation classification) directly in your browser on an
+    uploaded .wav or .iq file, and provides a viewer for full reports
+    exported by the desktop tool. The bit layer (blind de-interleaving,
+    FEC identification, CRC hunting) needs the full search engine and runs
+    in the desktop application.</p>
   </section>
 </main>
 <footer>rf-analyzer - Smart India Hackathon 2026 - blind RF signal analysis</footer>

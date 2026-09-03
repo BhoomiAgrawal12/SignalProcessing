@@ -13,3 +13,4 @@ ml/cvnet_rf/upstream/.cache/
 .env*
 examples/demo_result.json
 examples/demo_signal.iq
+examples/webtest/

@@ -20,6 +20,15 @@ function setupDrop() {
 }
 
 function readFile(f) {
+  const name = (f.name || "").toLowerCase();
+  if (!name.endsWith(".json")) {
+    if (confirm("This page views exported analysis.json reports. " +
+        "To analyse a raw .wav/.iq recording in the browser, use the " +
+        "Analyse page instead. Go there now?")) {
+      location.href = "analyze.html";
+    }
+    return;
+  }
   const r = new FileReader();
   r.onload = () => {
     try { render(JSON.parse(r.result)); }
