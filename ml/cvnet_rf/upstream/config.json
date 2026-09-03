@@ -1,0 +1,49 @@
+{
+  "model_name": "CVNet-RF",
+  "description": "Complex-Valued CNN vs Real-Valued CNN for Automatic Modulation Classification",
+  "dataset": "RadioML 2018.01A",
+  "num_classes": 24,
+  "input_shape": [2, 1024],
+  "modulation_classes": [
+    "OOK", "4ASK", "8ASK", "BPSK", "QPSK", "8PSK", "16PSK", "32PSK",
+    "16APSK", "32APSK", "64APSK", "128APSK", "16QAM", "32QAM", "64QAM",
+    "128QAM", "256QAM", "AM-SSB-WC", "AM-SSB-SC", "AM-DSB-WC", "AM-DSB-SC",
+    "FM", "GMSK", "OQPSK"
+  ],
+  "complex_cnn": {
+    "parameters": 379096,
+    "best_val_acc": 0.5029,
+    "best_epoch": 85,
+    "dropout": 0.5,
+    "num_epochs_trained": 100,
+    "optimizer": "Adam",
+    "learning_rate": 0.001,
+    "lr_min": 1e-6,
+    "weight_decay": 0.0001,
+    "label_smoothing": 0.1,
+    "architecture": "Complex Conv1D x3 + Complex BatchNorm + Complex MaxPool + FC"
+  },
+  "real_cnn": {
+    "parameters": 934040,
+    "best_val_acc": 0.5435,
+    "best_epoch": 100,
+    "dropout": 0.5,
+    "num_epochs_trained": 100,
+    "optimizer": "Adam",
+    "learning_rate": 0.001,
+    "lr_min": 1e-6,
+    "weight_decay": 0.0001,
+    "label_smoothing": 0.1,
+    "architecture": "Real Conv1D x3 + BatchNorm + MaxPool + FC"
+  },
+  "training": {
+    "dataset_size": 2560000,
+    "train_split": 0.8,
+    "val_split": 0.1,
+    "test_split": 0.1,
+    "batch_size": 256,
+    "snr_range_db": [-20, 30],
+    "augmentation": ["phase_rotation", "awgn"],
+    "device": "Apple MPS (M-series)"
+  }
+}
