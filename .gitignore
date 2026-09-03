@@ -9,3 +9,7 @@ examples/out/
 ml/cvnet_rf/checkpoints/
 ml/cvnet_rf/upstream/.cache/
 .DS_Store
+.vercel
+.env*
+examples/demo_result.json
+examples/demo_signal.iq
