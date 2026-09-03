@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rf-analyzer"
+version = "0.1.0"
+description = "Automated blind analysis of .IQ/.WAV SDR recordings: detection, parameter estimation, modulation classification, demodulation, and blind bit-layer reconstruction (interleaver/FEC/frame/CRC identification)."
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+ml = ["torch>=2.1", "huggingface_hub>=0.20"]
+gui = ["PyQt6>=6.6", "pyqtgraph>=0.13"]
+io = ["soundfile>=0.12", "sigmf>=1.2"]
+report = ["reportlab>=4.0"]
+fec = ["reedsolo>=1.7"]
+dev = ["pytest>=7.4"]
+all = ["rf-analyzer[ml,gui,io,report,fec,dev]"]
+
+[project.scripts]
+rf-analyzer = "rfanalyzer.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
