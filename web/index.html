@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rf-analyzer - blind SDR signal analysis</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>rf-analyzer</h1>
+  <p class="tag">Automated blind analysis of .IQ / .WAV SDR recordings</p>
+</header>
+<main>
+  <section class="hero">
+    <p>rf-analyzer takes an unknown IQ or WAV recording and works its way from
+    raw RF samples to an analyst-readable interpretation: signal detection,
+    parameter estimation, modulation classification, demodulation, and a
+    <strong>Bit-Layer Reconstruction Engine</strong> that blindly identifies
+    scramblers, interleavers, forward error correction, frame structure,
+    CRCs and payloads using GF(2) rank analysis.</p>
+    <p>
+      <a class="btn" href="viewer.html">Open the report viewer</a>
+      <a class="btn alt" href="viewer.html?demo=1">View a demo analysis</a>
+      <a class="btn alt" href="https://github.com/BhoomiAgrawal12/SignalProcessing">Source on GitHub</a>
+    </p>
+  </section>
+  <section class="grid">
+    <div class="card"><h3>S0-S2 Front end</h3>
+      <p>WAV/RIFF parsing with the SDR auxi chunk, automatic raw-IQ format
+      sniffing, conditioning, CFAR detection on the waterfall. The sample
+      rate of a headerless file is reported unknown, never guessed.</p></div>
+    <div class="card"><h3>S3-S5 Measurement</h3>
+      <p>Channelisation, ITU occupied bandwidth, M2M4 SNR, cyclostationary
+      symbol rate, FSK tone histograms, and a two-engine modulation
+      classifier (higher-order cumulants + CVNet-RF) with an honest fusion
+      voter that surfaces disagreement.</p></div>
+    <div class="card"><h3>S6-S7 Demodulation</h3>
+      <p>Feedforward Oerder&amp;Meyr timing recovery, decision-directed
+      carrier tracking, soft-bit LLR output, and a full phase/IQ/polarity
+      ambiguity fan-out, because blind analysis is a search, not a
+      pipeline.</p></div>
+    <div class="card"><h3>S8-S10 Bit layer</h3>
+      <p>Blind de-interleaving and blind FEC identification via bit-packed
+      GF(2) rank deficiency, scrambler phase alignment, dual-code
+      convolutional identification, Reed-Solomon syndrome sweeps, frame
+      period detection, entropy field maps and CRC hunting.</p></div>
+    <div class="card"><h3>S11 Reporting</h3>
+      <p>JSON, CSV, SigMF annotations, PDF parameter sheet, payload export
+      and a pre-configured GNU Radio flowgraph. Every number carries a
+      confidence and the method that produced it.</p></div>
+    <div class="card"><h3>Honest by design</h3>
+      <p>Encrypted payloads are reported as high-entropy, not "decoded".
+      Unknown modulations are reported unknown. The tool distinguishes
+      detected, estimated, inferred, classified and validated.</p></div>
+  </section>
+  <section>
+    <h2>Workflow</h2>
+    <pre class="flow">recording (.iq / .wav)
+  -> format sniffing -> conditioning -> CFAR detection -> channelisation
+  -> parameter estimation -> modulation classification -> demodulation
+  -> ambiguity fan-out -> descrambling -> blind de-interleaving
+  -> blind FEC identification -> framing -> CRC -> payload
+  -> analyst report (JSON / CSV / PDF / SigMF / GRC)</pre>
+    <p>The desktop application (PyQt6) and the CLI share one analysis
+    engine. This site hosts the project overview and a browser-based
+    viewer for exported analysis reports.</p>
+  </section>
+</main>
+<footer>rf-analyzer - Smart India Hackathon 2026 - blind RF signal analysis</footer>
+<script>
+</script>
+</body>
+</html>
