@@ -23,6 +23,7 @@ all = ["rf-analyzer[ml,gui,io,report,fec,dev]"]
 
 [project.scripts]
 rf-analyzer = "rfanalyzer.cli:main"
+rf-analyzer-gui = "rfanalyzer.gui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

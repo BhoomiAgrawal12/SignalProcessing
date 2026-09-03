@@ -230,6 +230,7 @@ class DemodulationResult:
     samples_per_symbol: float = 0.0
     lock_metrics: dict = field(default_factory=dict)
     warnings: list = field(default_factory=list)
+    eye_trace: np.ndarray = field(default=None, repr=False)
 
     def to_dict(self) -> dict:
         return {"modulation": self.modulation,

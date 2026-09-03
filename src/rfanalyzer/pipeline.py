@@ -160,6 +160,16 @@ class RFAnalyzer:
             result.warnings.extend(demod.warnings)
             if demod.symbols is not None and len(demod.symbols):
                 result.plots["constellation"] = _const_plot(demod.symbols)
+            if getattr(demod, "eye_trace", None) is not None and \
+                    len(demod.eye_trace):
+                q = int(demod.lock_metrics.get("eye_sps", 8))
+                tr = demod.eye_trace
+                n_tr = min(100, len(tr) // (2 * q))
+                result.plots["eye"] = {
+                    "sps": q,
+                    "traces": [[round(float(v), 4) for v in
+                                tr[i * 2 * q:(i + 1) * 2 * q].real]
+                               for i in range(n_tr)]}
             if demod.hard_bits is None or len(demod.hard_bits) < 256:
                 result.warnings.append("demodulation produced too few bits "
                                        "for bit-layer analysis")

@@ -170,6 +170,11 @@ def demodulate(x: np.ndarray, modulation: str, sps: float,
     taps = rrc_taps(n_int, config.rrc_span_symbols, config.rrc_rolloff)
     x = sig.fftconvolve(x, taps, mode="same")
 
+    # keep a short matched-filtered trace for the eye diagram display
+    q_eye = max(2, int(round(sps)))
+    res.lock_metrics["eye_sps"] = q_eye
+    res.eye_trace = np.asarray(x[: 200 * q_eye], dtype=np.complex64)
+
     # 3. timing recovery (feedforward Oerder&Meyr)
     syms, tone, tlock = _timing_recover(x, sps, config.max_symbols)
     res.timing_locked = tlock
