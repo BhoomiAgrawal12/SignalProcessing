@@ -160,6 +160,18 @@ class RFAnalyzer:
             result.warnings.extend(demod.warnings)
             if demod.symbols is not None and len(demod.symbols):
                 result.plots["constellation"] = _const_plot(demod.symbols)
+            # EVM-based SNR refinement: M2M4 assumes a symbol-spaced
+            # constant-modulus signal and reads low on oversampled or QAM
+            # inputs; once the demodulator locks, EVM gives the better
+            # estimate and the method is recorded honestly.
+            if (demod.carrier_locked and demod.timing_locked and
+                    demod.evm_percent and demod.evm_percent > 0.1):
+                import math
+                params.snr_db = round(-20 * math.log10(
+                    demod.evm_percent / 100.0), 1)
+                params.confidences["snr"] = {
+                    "value": 0.9, "method": "EVM after synchronisation",
+                    "verdict": "estimated"}
             if getattr(demod, "eye_trace", None) is not None and \
                     len(demod.eye_trace):
                 q = int(demod.lock_metrics.get("eye_sps", 8))
