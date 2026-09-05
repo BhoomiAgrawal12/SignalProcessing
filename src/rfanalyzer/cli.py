@@ -62,17 +62,37 @@ def main(argv=None):
     r.add_argument("json_file")
     r.add_argument("--output", "-o", default="rf_analysis")
 
-    s = sub.add_parser("synth", help="generate a labelled synthetic recording")
-    s.add_argument("output", help="output .iq path (ground truth JSON beside it)")
+    s = sub.add_parser(
+        "synth", help="generate a labelled synthetic recording",
+        description="Generate a synthetic recording with full ground truth. "
+        "The output format follows the file extension: "
+        ".iq/.bin/.raw = raw interleaved complex64; "
+        ".wav = stereo WAV (left=I, right=Q, float32 by default, needs "
+        "--sample-rate); "
+        ".sigmf = SigMF pair (<base>.sigmf-data cf32_le + <base>.sigmf-meta, "
+        "ground truth in the rfanalyzer: extension namespace). "
+        "Every format also writes <base>_truth.json.")
+    s.add_argument("output", help="output path; extension selects the format "
+                   "(.iq | .wav | .sigmf)")
     s.add_argument("--modulation", default="QPSK")
     s.add_argument("--snr", type=float, default=20.0)
     s.add_argument("--sps", type=float, default=8.0)
-    s.add_argument("--fec", choices=["none", "conv", "rs"], default="none")
+    s.add_argument("--fec", choices=["none", "conv", "rs", "ldpc"],
+                   default="none")
     s.add_argument("--interleaver", choices=["none", "block", "helical",
                                              "convolutional"], default="none")
     s.add_argument("--scrambler", choices=["none", "pn9"], default="none")
     s.add_argument("--frames", type=int, default=80)
     s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--sample-rate", type=float, default=None,
+                   help="sample rate in Hz (required for .wav, recommended "
+                        "for .sigmf; recorded in the header/metadata)")
+    s.add_argument("--centre-frequency", "--center-frequency",
+                   dest="centre_frequency", type=float, default=None,
+                   help="centre frequency in Hz (recorded in SigMF captures)")
+    s.add_argument("--wav-bits", type=int, choices=[16, 32], default=32,
+                   help="WAV sample format: 32 = IEEE float32 (default, "
+                        "exact), 16 = PCM16")
 
     g = sub.add_parser("signatures", help="list the signature library")
 
@@ -216,12 +236,15 @@ def _cmd_report(args):
 def _cmd_synth(args):
     import numpy as np
     from .synth.factory import WaveformFactory
+    from .synth.writers import write_recording
     fac = WaveformFactory(seed=args.seed)
     fec = {"family": "none"}
     if args.fec == "conv":
         fec = {"family": "convolutional", "K": 7, "generators": (0o171, 0o133)}
     elif args.fec == "rs":
         fec = {"family": "reed_solomon", "n": 255, "k": 223}
+    elif args.fec == "ldpc":
+        fec = {"family": "ldpc", "n": 256, "k": 128, "seed": 1}
     il = {"kind": "none"}
     if args.interleaver == "block":
         il = {"kind": "block", "rows": 8, "cols": 16}
@@ -236,11 +259,14 @@ def _cmd_synth(args):
                           snr_db=args.snr, cfo_norm=0.005, phase_offset=0.4,
                           fec=fec, interleaver=il, scrambler=scr,
                           n_frames=args.frames)
-    iq.astype(np.complex64).tofile(args.output)
-    with open(os.path.splitext(args.output)[0] + "_truth.json", "w") as f:
-        f.write(gt.to_json())
-    print(f"wrote {len(iq)} complex64 samples to {args.output}")
-    print(f"ground truth: {os.path.splitext(args.output)[0]}_truth.json")
+    written = write_recording(iq, gt, args.output,
+                              sample_rate=args.sample_rate,
+                              center_frequency=args.centre_frequency,
+                              wav_bits=args.wav_bits)
+    print(f"generated {len(iq)} complex64 samples "
+          f"({args.modulation}, SNR {args.snr} dB, FEC {args.fec})")
+    for kind, path in written.items():
+        print(f"  {kind:6s} {path}")
     return 0
 
 

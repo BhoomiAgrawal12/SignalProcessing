@@ -21,6 +21,7 @@ import numpy as np
 from ..common.models import FECHypothesis
 from .conv import ConvCode, STANDARD_CODES, viterbi_decode, conv_encode
 from .rs import RSCode, bits_to_symbols
+from .ldpc import identify_ldpc
 
 VERSION = 2
 
@@ -139,7 +140,7 @@ def identify_rs(bits: np.ndarray, candidates: list,
 
 
 def identify_fec(bits: np.ndarray, config, llrs: np.ndarray = None,
-                 try_rs: bool = True) -> list:
+                 try_rs: bool = True, try_ldpc: bool = True) -> list:
     """Full FEC identification: returns ranked FECHypothesis list, always
     ending with an explicit 'none' hypothesis."""
     bits = np.asarray(bits, dtype=np.uint8)
@@ -210,6 +211,26 @@ def identify_fec(bits: np.ndarray, config, llrs: np.ndarray = None,
             syndrome_zero_rate=hit["syndrome_zero_rate"],
             decoded_bits=decoded,
             score=hit["syndrome_zero_rate"] * 0.98))
+
+    # LDPC: candidate-set matching (skipped when a confident hit exists)
+    best_so_far = max((h.syndrome_zero_rate or 0) for h in hyps) if hyps else 0.0
+    if try_ldpc and best_so_far < 0.9 and getattr(config, "ldpc_candidates", None):
+        for hit in identify_ldpc(bits, config.ldpc_candidates)[:2]:
+            if hit["syndrome_zero_rate"] < config.min_syndrome_zero_rate * 0.5:
+                continue
+            code = hit["code"]
+            decoded, converged = code.decode_stream(bits, hit["offset"])
+            hyps.append(FECHypothesis(
+                family="ldpc", code_rate=hit["k"] / hit["n"],
+                parameters={"n": hit["n"], "k": hit["k"],
+                            "seed": hit.get("seed", 1),
+                            "offset": hit["offset"],
+                            "decode_converged_rate": round(converged, 3),
+                            "note": "candidate-set match (H known a priori); "
+                                    "arbitrary H reconstruction is out of scope"},
+                syndrome_zero_rate=hit["syndrome_zero_rate"],
+                decoded_bits=decoded,
+                score=hit["syndrome_zero_rate"] * 0.97))
 
     hyps.append(FECHypothesis(family="none", score=0.2,
                               parameters={"reason": "no code identified above threshold"

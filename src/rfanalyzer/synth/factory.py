@@ -97,6 +97,14 @@ class WaveformFactory:
             gt.fec.update({"K": code.K,
                            "generators_octal": [oct(g) for g in code.generators],
                            "rate": "1/2"})
+        elif fec["family"] == "ldpc":
+            from .. import fec as _fecpkg
+            from ..fec.ldpc import LDPCCode
+            code = LDPCCode(fec.get("n", 256), fec.get("k", 128),
+                            fec.get("seed", 1))
+            bits = code.encode(bits)
+            gt.fec.update({"n": code.n, "k": code.k, "seed": code.seed,
+                           "rate": f"{code.k}/{code.n}"})
         elif fec["family"] == "reed_solomon":
             rs = RSCode(fec.get("n", 255), fec.get("k", 223),
                         fcr=fec.get("fcr", 1), generator=fec.get("generator", 2))
@@ -196,23 +204,3 @@ class WaveformFactory:
         inst_f = np.repeat(tones, int(round(sps)))
         phase = 2 * np.pi * np.cumsum(inst_f)
         return np.exp(1j * phase), dev
-
-
-def write_sigmf(iq: np.ndarray, gt: GroundTruth, base_path: str,
-                sample_rate: float = None):
-    """Write .sigmf-data (cf32_le) + .sigmf-meta with ground truth in a
-    custom namespace so automated scoring can read it back."""
-    iq.astype(np.complex64).tofile(base_path + ".sigmf-data")
-    meta = {
-        "global": {
-            "core:datatype": "cf32_le",
-            "core:version": "1.0.0",
-            "core:description": "rf-analyzer synthetic waveform",
-            **({"core:sample_rate": sample_rate} if sample_rate else {}),
-            "rfanalyzer:ground_truth": json.loads(gt.to_json()),
-        },
-        "captures": [{"core:sample_start": 0}],
-        "annotations": [],
-    }
-    with open(base_path + ".sigmf-meta", "w") as f:
-        json.dump(meta, f, indent=2)

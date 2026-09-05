@@ -80,6 +80,11 @@ class FECConfig:
         {"n": 255, "k": 239, "prim": 0x11d, "fcr": 0, "generator": 2},
         {"n": 255, "k": 223, "prim": 0x11d, "fcr": 0, "generator": 2},
     ])
+    ldpc_candidates: list = field(default_factory=lambda: [
+        {"n": 128, "k": 64, "seed": 1},
+        {"n": 256, "k": 128, "seed": 1},
+        {"n": 512, "k": 256, "seed": 1},
+    ])
     min_syndrome_zero_rate: float = 0.7
     max_test_bits: int = 100000
 
