@@ -1,4 +1,5 @@
-"""Stage S11: machine-readable and analyst-readable exports.
+"""Stage S12: machine-readable and analyst-readable exports
+(S11 payload intelligence results are included in every format).
 
 JSON / CSV / payload.bin+hex always work; PDF needs reportlab; SigMF
 sidecar is plain JSON per the SigMF v1 spec; the .grc export writes a GNU
@@ -54,6 +55,17 @@ def _rows_for_csv(r: dict) -> list:
     rows.append(("payload.n_bytes", pl.get("n_bytes"), "", ""))
     rows.append(("payload.entropy_bits_per_bit", pl.get("entropy_bits_per_bit"),
                  "", "likely encrypted" if pl.get("likely_encrypted") else ""))
+    pi = r.get("payload_intelligence") or {}
+    if pi.get("available"):
+        summ = pi.get("summary", {})
+        rows.append(("payload_intel.classification", summ.get("classification"),
+                     summ.get("confidence"), summ.get("strength")))
+        for f in pi.get("findings", [])[:10]:
+            rows.append((f"payload_intel.{f.get('category')}",
+                         f.get("verdict"), f.get("confidence"),
+                         "; ".join(f.get("evidence", [])[:2])))
+        for lim in pi.get("limitations", [])[:4]:
+            rows.append(("payload_intel.limitation", lim, "", ""))
     return rows
 
 

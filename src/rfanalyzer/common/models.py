@@ -381,8 +381,10 @@ class AnalysisResult:
     fec: Optional[FECHypothesis] = None
     frames: Optional[FrameHypothesis] = None
     payload: Optional[Payload] = None
+    payload_intelligence: Optional[dict] = None
     hypotheses: list = field(default_factory=list)
     stage_timings: dict = field(default_factory=dict)
+    pipeline_trace: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
     plots: dict = field(default_factory=dict)      # name -> plot data for GUI/web
 
@@ -405,8 +407,10 @@ class AnalysisResult:
             "fec": opt(self.fec),
             "frames": opt(self.frames),
             "payload": opt(self.payload),
+            "payload_intelligence": self.payload_intelligence,
             "hypotheses": [h.to_dict() for h in self.hypotheses],
             "stage_timings": {k: round(v, 3) for k, v in self.stage_timings.items()},
+            "pipeline_trace": self.pipeline_trace,
             "warnings": self.warnings,
             "plots": self.plots,
         }

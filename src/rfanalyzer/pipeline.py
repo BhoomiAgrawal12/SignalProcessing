@@ -31,6 +31,54 @@ from .ingestion import load_recording
 
 STAGE_VERSION = 3   # bump to invalidate caches when algorithms change
 
+# stage catalogue for the pipeline trace (drives the flow visualisation)
+STAGES = [
+    ("S0", "Ingestion & format detection"),
+    ("S1", "Conditioning"),
+    ("S2", "Signal detection (CFAR)"),
+    ("S3", "Channelisation"),
+    ("S4", "Parameter estimation"),
+    ("S5", "Modulation classification"),
+    ("S6", "Demodulation"),
+    ("S7", "Ambiguity fan-out & descrambling"),
+    ("S8", "Blind de-interleaving"),
+    ("S9", "Blind FEC identification"),
+    ("S10", "Framing & CRC"),
+    ("S11", "Payload intelligence"),
+    ("S12", "Reporting & export"),
+]
+
+
+class _Trace:
+    """Collects one entry per pipeline stage for the flow visualisation."""
+
+    def __init__(self, timings: dict):
+        self.entries = {}
+        self.timings = timings
+
+    def mark(self, stage: str, status: str, summary: str):
+        self.entries[stage] = {"status": status, "summary": summary}
+
+    def finalize(self, stop_reason: str = None) -> list:
+        out = []
+        for sid, title in STAGES:
+            e = self.entries.get(sid)
+            if e is None:
+                e = {"status": "skipped",
+                     "summary": stop_reason or "not reached"}
+            timing_key = {
+                "S0": "S0_ingest", "S1": "S1_condition", "S2": "S2_detect",
+                "S3": "S3_channelize", "S4": "S4_parameters",
+                "S5": "S5_modulation", "S6": "S6_demodulate",
+                "S7": "S7_ambiguity", "S8": "S8_S10_bitlayer",
+                "S9": "S8_S10_bitlayer", "S10": "S8_S10_bitlayer",
+                "S11": "S11_payload_intel",
+            }.get(sid)
+            out.append({"stage": sid, "title": title, **e,
+                        "elapsed_s": round(self.timings.get(timing_key, 0), 3)
+                        if timing_key and timing_key in self.timings else None})
+        return out
+
 
 class RFAnalyzer:
     def __init__(self, config: Optional[Config] = None,
@@ -53,6 +101,7 @@ class RFAnalyzer:
         overrides = overrides or {}
         result = AnalysisResult(run_id=new_run_id())
         timer = StageTimer(self.log, result.stage_timings)
+        trace = _Trace(result.stage_timings)
         prog = progress or (lambda stage, frac: None)
 
         # ---------------- S0 ingest -----------------------------------
@@ -60,6 +109,10 @@ class RFAnalyzer:
             rec = load_recording(path, sample_rate, center_frequency, datatype)
             result.recording_meta = rec.meta_dict()
             result.warnings.extend(rec.warnings)
+            trace.mark("S0", "executed",
+                       f"{rec.format} / {rec.datatype or 'n/a'}, "
+                       f"{rec.n_samples:,} samples, sample rate "
+                       f"{'{:,.0f} Hz'.format(rec.sample_rate) if rec.sample_rate else 'unknown'}")
         prog("ingest", 1.0)
         data_hash = content_hash(rec.samples)
 
@@ -68,6 +121,10 @@ class RFAnalyzer:
             x, cond = condition(rec.samples)
             result.conditioning = cond
             result.warnings.extend(cond.warnings)
+            trace.mark("S1", "executed",
+                       f"DC {'removed' if cond.dc_removed else 'negligible'}, "
+                       f"clipping {cond.clipping_fraction*100:.2f}%, "
+                       f"IQ {'corrected' if cond.iq_corrected else 'balanced'}")
         prog("condition", 1.0)
 
         # ---------------- S2 detection ---------------------------------
@@ -93,9 +150,15 @@ class RFAnalyzer:
                 s.sample_rate = rec.sample_rate
             result.segments = segments
             result.plots.update(plots)
+            trace.mark("S2", "executed",
+                       f"{len(segments)} signal(s) above threshold" +
+                       (f"; best SNR {segments[0].snr_db:.1f} dB"
+                        if segments else ""))
             if not segments:
                 result.warnings.append("no signals detected above the CFAR "
                                        "threshold; analysis stopped at S2")
+                result.pipeline_trace = trace.finalize(
+                    "stopped at S2: no signals detected")
                 return result
         prog("detect", 1.0)
 
@@ -109,6 +172,9 @@ class RFAnalyzer:
         with timer.stage("S3_channelize"):
             ch = channelize(x, seg)
             base = ch["samples"]
+            trace.mark("S3", "executed",
+                       f"signal {sel}: shifted {seg.center_norm:+.4f}, "
+                       f"{len(base):,} samples after trim")
         prog("channelize", 1.0)
 
         # ---------------- S4 parameters --------------------------------
@@ -123,6 +189,10 @@ class RFAnalyzer:
                     "value": 1.0, "method": "analyst override",
                     "verdict": "detected"}
             result.parameters = params
+            trace.mark("S4", "executed",
+                       f"Rs {params.symbol_rate_norm if params.symbol_rate_norm else 'unknown'}"
+                       f" (norm), SNR {params.snr_db} dB, "
+                       f"OBW {params.obw99_norm}")
         prog("parameters", 1.0)
 
         # ---------------- S5 modulation --------------------------------
@@ -144,10 +214,15 @@ class RFAnalyzer:
                 modulation = result.modulation.prediction
         prog("modulation", 1.0)
 
+        trace.mark("S5", "executed",
+                   f"{modulation} (confidence "
+                   f"{result.modulation.confidence})")
         if modulation in ("UNKNOWN", "OFDM", "OOK"):
             result.warnings.append(
                 f"modulation '{modulation}' is outside the demodulation set; "
                 "stopping after parameter estimation (analyst may override)")
+            result.pipeline_trace = trace.finalize(
+                f"stopped after S5: '{modulation}' not demodulated")
             return result
 
         # ---------------- S6 demodulate --------------------------------
@@ -182,9 +257,15 @@ class RFAnalyzer:
                     "traces": [[round(float(v), 4) for v in
                                 tr[i * 2 * q:(i + 1) * 2 * q].real]
                                for i in range(n_tr)]}
+            trace.mark("S6", "executed",
+                       f"{0 if demod.symbols is None else len(demod.symbols):,}"
+                       f" symbols, EVM {demod.evm_percent}%, locks "
+                       f"T={demod.timing_locked} C={demod.carrier_locked}")
             if demod.hard_bits is None or len(demod.hard_bits) < 256:
                 result.warnings.append("demodulation produced too few bits "
                                        "for bit-layer analysis")
+                result.pipeline_trace = trace.finalize(
+                    "stopped after S6: too few bits recovered")
                 return result
         prog("demodulate", 1.0)
 
@@ -199,9 +280,12 @@ class RFAnalyzer:
                 for s in streams:
                     if s.llrs is None:
                         s.llrs = demod.llrs
+            trace.mark("S7", "executed",
+                       f"{len(streams)} candidate bit streams")
         prog("ambiguity", 1.0)
 
         # ---------------- S8-S10 bit-layer search -----------------------
+        frames_matrix = None
         with timer.stage("S8_S10_bitlayer", n_streams=len(streams)):
             search = bitlayer_search(streams, self.config.bitlayer,
                                      self.config.fec, self.config.framing,
@@ -211,8 +295,66 @@ class RFAnalyzer:
             best = search["best"]
             if best:
                 _fill_result_from_best(result, best)
+                fr = best.get("frames")
+                if fr:
+                    frames_matrix = fr["analysis"]["frames"]
+            il, fec, frh = result.interleaver, result.fec, result.frames
+            scr = result.scrambler
+            s7_extra = (f"; descrambler {scr.name or scr.kind}"
+                        if scr else "")
+            trace.mark("S7", "executed",
+                       f"{len(streams)} candidate bit streams{s7_extra}")
+            trace.mark("S8", "executed",
+                       f"interleaver: {il.kind} {il.parameters if il.kind != 'none' else ''}"
+                       if il else "no interleaver hypothesis")
+            trace.mark("S9", "executed",
+                       (f"FEC: {fec.family}"
+                        + (f", syndrome-zero rate {fec.syndrome_zero_rate}"
+                           if fec.syndrome_zero_rate is not None else ""))
+                       if fec else "no FEC hypothesis")
+            trace.mark("S10", "executed",
+                       (f"frames {frh.frame_length_bits} bits, sync "
+                        f"{frh.sync_word_hex}, CRC "
+                        f"{frh.crc['name'] if frh.crc else 'none found'}")
+                       if frh else "no frame structure found")
         prog("bitlayer", 1.0)
 
+        # ---------------- S11 payload intelligence ----------------------
+        if self.config.payload_intelligence.enabled and result.payload and \
+                result.payload.data:
+            with timer.stage("S11_payload_intel",
+                             n_bytes=len(result.payload.data)):
+                from .payload import analyze_payload
+                crc = result.frames.crc if result.frames else None
+                provenance = {
+                    "crc_validated": bool(crc and
+                                          crc.get("pass_fraction", 0) > 0.9),
+                    "fec_syndrome_rate": (result.fec.syndrome_zero_rate
+                                          if result.fec else None),
+                    "demod_locked": bool(demod.carrier_locked and
+                                         demod.timing_locked),
+                }
+                result.payload_intelligence = analyze_payload(
+                    result.payload.data, frames=frames_matrix,
+                    provenance=provenance,
+                    config=self.config.payload_intelligence)
+                pi = result.payload_intelligence
+                trace.mark("S11", "executed",
+                           f"{pi['summary']['classification']} "
+                           f"({pi['summary']['strength']}, "
+                           f"{pi['summary']['confidence']})"
+                           if pi.get("available") else "no payload to analyse")
+        else:
+            trace.mark("S11", "skipped",
+                       "disabled in config" if not
+                       self.config.payload_intelligence.enabled
+                       else "no payload bytes recovered")
+        prog("payload_intel", 1.0)
+
+        trace.mark("S12", "ready",
+                   "exports: JSON, CSV, payload, SigMF, PDF, GRC "
+                   "(rendered by CLI/GUI/web)")
+        result.pipeline_trace = trace.finalize()
         return result
 
 

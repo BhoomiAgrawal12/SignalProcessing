@@ -109,6 +109,18 @@ class FramingConfig:
 
 
 @dataclass
+class PayloadIntelConfig:
+    enabled: bool = True
+    text_decoding: bool = True
+    encoding_discovery: bool = True
+    structure_discovery: bool = True
+    compression_detection: bool = True
+    protocol_fingerprinting: bool = True
+    max_analysis_bytes: int = 1 << 20
+    max_decompression_bytes: int = 1 << 20
+
+
+@dataclass
 class Config:
     cfar: CFARConfig = field(default_factory=CFARConfig)
     params: ParamEstConfig = field(default_factory=ParamEstConfig)
@@ -117,6 +129,8 @@ class Config:
     bitlayer: BitLayerConfig = field(default_factory=BitLayerConfig)
     fec: FECConfig = field(default_factory=FECConfig)
     framing: FramingConfig = field(default_factory=FramingConfig)
+    payload_intelligence: PayloadIntelConfig = field(
+        default_factory=PayloadIntelConfig)
     cache_dir: str = ""
     signature_db: str = ""
     log_level: str = "INFO"
@@ -128,7 +142,7 @@ class Config:
 _SECTION_TYPES = {
     "cfar": CFARConfig, "params": ParamEstConfig, "modulation": ModulationConfig,
     "demod": DemodConfig, "bitlayer": BitLayerConfig, "fec": FECConfig,
-    "framing": FramingConfig,
+    "framing": FramingConfig, "payload_intelligence": PayloadIntelConfig,
 }
 
 
