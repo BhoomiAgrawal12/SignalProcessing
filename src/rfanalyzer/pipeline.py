@@ -432,6 +432,10 @@ def _extract_payload(frames_mat: np.ndarray, analysis: dict, crc) -> bytes:
     start_bit = 0
     if sync.get("found"):
         start_bit = sync["offset_bits"] + sync["length_bits"]
+        # keep the payload byte-aligned: a constant run can end mid-byte
+        # (e.g. constant text characters bordering a varying field) and a
+        # bit-shifted slice would garble every downstream byte analysis
+        start_bit -= start_bit % 8
     end_bit = frames_mat.shape[1]
     if crc:
         end_bit = min(end_bit, crc["crc_byte_offset"] * 8)

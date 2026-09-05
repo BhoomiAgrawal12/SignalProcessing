@@ -54,11 +54,18 @@ class WaveformFactory:
 
     # ---------------- frame construction ---------------------------------
     def build_frames(self, n_frames: int = 60, payload_len: int = 6,
-                     sync: int = 0xEB90) -> tuple:
+                     sync: int = 0xEB90, payload_mode: str = "random") -> tuple:
+        """payload_mode: 'random' (default, printable random bytes) or
+        'text' (readable telemetry-style ASCII, useful for demonstrating
+        the S11 payload-intelligence stage)."""
         frames, payloads = [], []
         for i in range(n_frames):
-            payload = bytes(self.rng.integers(32, 127, payload_len,
-                                              dtype=np.uint8))
+            if payload_mode == "text":
+                payload = f"T{i % 100:02d}C{20 + i % 10}".encode()[:payload_len]
+                payload = payload.ljust(payload_len, b" ")
+            else:
+                payload = bytes(self.rng.integers(32, 127, payload_len,
+                                                  dtype=np.uint8))
             payloads.append(payload.hex())
             body = sync.to_bytes(2, "big") + bytes([i & 0xFF, 0x01]) + payload
             crc = crc_compute(body, 16, 0x1021, 0xFFFF, False, False, 0)
@@ -75,13 +82,15 @@ class WaveformFactory:
                  cfo_norm: float = 0.0, phase_offset: float = 0.0,
                  fec: dict = None, interleaver: dict = None,
                  scrambler: dict = None, n_frames: int = 60,
-                 impair: dict = None, n_pad_noise: int = 2000) -> tuple:
+                 impair: dict = None, n_pad_noise: int = 2000,
+                 payload_mode: str = "random") -> tuple:
         """Returns (iq complex64, GroundTruth)."""
         gt = GroundTruth(modulation=modulation, samples_per_symbol=sps,
                          symbol_rate_norm=1.0 / sps, rolloff=rolloff,
                          snr_db=snr_db, cfo_norm=cfo_norm,
                          phase_offset=phase_offset)
-        info_bits, frame_meta, payloads = self.build_frames(n_frames)
+        info_bits, frame_meta, payloads = self.build_frames(
+            n_frames, payload_mode=payload_mode)
         gt.frame = frame_meta
         gt.payloads = payloads
         gt.info_bits = info_bits.tolist()

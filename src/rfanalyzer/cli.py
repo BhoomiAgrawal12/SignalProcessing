@@ -90,6 +90,9 @@ def main(argv=None):
     s.add_argument("--centre-frequency", "--center-frequency",
                    dest="centre_frequency", type=float, default=None,
                    help="centre frequency in Hz (recorded in SigMF captures)")
+    s.add_argument("--payload", choices=["random", "text"], default="random",
+                   help="frame payload content: random printable bytes or "
+                        "readable telemetry-style text (nice for the S11 demo)")
     s.add_argument("--wav-bits", type=int, choices=[16, 32], default=32,
                    help="WAV sample format: 32 = IEEE float32 (default, "
                         "exact), 16 = PCM16")
@@ -258,7 +261,7 @@ def _cmd_synth(args):
     iq, gt = fac.generate(modulation=args.modulation, sps=args.sps,
                           snr_db=args.snr, cfo_norm=0.005, phase_offset=0.4,
                           fec=fec, interleaver=il, scrambler=scr,
-                          n_frames=args.frames)
+                          n_frames=args.frames, payload_mode=args.payload)
     written = write_recording(iq, gt, args.output,
                               sample_rate=args.sample_rate,
                               center_frequency=args.centre_frequency,

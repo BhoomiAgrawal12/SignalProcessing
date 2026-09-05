@@ -187,6 +187,21 @@ def bitlayer_search(streams: list, config, fec_config, framing_config,
                         fr = analyze_frames(pol_bits, fl)
                     hits = crc_hunt(fr["frames"], framing_config.crc_candidates) \
                         if fl % 8 == 0 else []
+                    # the longest-constant-run sync heuristic can anchor on
+                    # constant PAYLOAD bytes (e.g. repetitive text), leaving
+                    # the CRC off the frame end; search the remaining byte
+                    # rotations for a CRC-consistent boundary
+                    if not hits and fl % 8 == 0:
+                        for shift in range(1, fl // 8):
+                            cand_bits = pol_bits[shift * 8:]
+                            if len(cand_bits) < 4 * fl:
+                                break
+                            fr2 = analyze_frames(cand_bits, fl)
+                            h2 = crc_hunt(fr2["frames"],
+                                          framing_config.crc_candidates)
+                            if h2:
+                                pol_bits, fr, hits = cand_bits, fr2, h2
+                                break
                     if frame_result is None or hits:
                         frame_result = {"frame_length": fl, "analysis": fr,
                                         "candidates": frame_cands,

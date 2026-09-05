@@ -40,7 +40,7 @@ def _structure_score(bits: np.ndarray, L_max: int, sig_thr: float) -> tuple:
     return n_sig, total, smallest
 
 
-def _fine_structure_sig(bits: np.ndarray, test_Ls=(16, 24, 32, 48)) -> float:
+def _fine_structure_sig(bits: np.ndarray, test_Ls=(16, 32)) -> float:
     """Cheap single-shot evidence of fine-grained linear structure: max
     rank-deficiency significance over a few small trial widths."""
     best = 0.0
@@ -57,17 +57,31 @@ def _fine_structure_sig(bits: np.ndarray, test_Ls=(16, 24, 32, 48)) -> float:
 def _align_and_test(bits: np.ndarray, deinterleave, P: int,
                     sig_thr: float, max_offsets: int = None) -> tuple:
     """Sweep the block-phase offset (the demodulated stream almost never
-    starts on an interleaver boundary); returns (best_offset, best_sig)."""
+    starts on an interleaver boundary); returns (best_offset, best_sig).
+
+    Coarse-to-fine: the fine-structure score of the correct inverse decays
+    gradually around the true offset, so a stride-2 scan followed by a
+    +-1 refinement finds the same maximum at half the cost, and a
+    decisively strong dip stops the scan immediately."""
+    n_off = min(P, max_offsets or P)
+
+    def test(off):
+        return _fine_structure_sig(deinterleave(bits[off:])[:20000])
+
     best_off, best_sig = 0, 0.0
-    for off in range(min(P, max_offsets or P)):
-        de = deinterleave(bits[off:])
-        sig = _fine_structure_sig(de[:20000])
+    stride = 2 if n_off >= 16 else 1
+    for off in range(0, n_off, stride):
+        sig = test(off)
         if sig > best_sig:
             best_off, best_sig = off, sig
-        # near-block-aligned offsets also show partial structure, so only a
-        # decisively strong dip justifies stopping before the full sweep
         if best_sig > 30:
             break
+    if stride > 1 and best_sig > 0:
+        for off in (best_off - 1, best_off + 1):
+            if 0 <= off < n_off:
+                sig = test(off)
+                if sig > best_sig:
+                    best_off, best_sig = off, sig
     return best_off, best_sig
 
 
@@ -121,44 +135,58 @@ def identify_interleaver(bits: np.ndarray, max_L: int = 512,
     hyps = []
     base_sig = _fine_structure_sig(bits[:20000])
 
-    # --- block hypotheses (with block-phase alignment sweep) --------------
-    for r, c in _factor_pairs(P):
-        off, sig_gain = _align_and_test(
-            bits, lambda b, r=r, c=c: block_deinterleave(b, r, c), P, sig_thr)
-        if sig_gain > max(sig_thr, 2 * base_sig):
-            hyps.append(InterleaverHypothesis(
-                kind="block", period=P,
-                parameters={"rows": r, "cols": c, "offset": off},
-                score=float(sig_gain)))
+    # Candidate periods: repetitive payload data can carve spurious weak
+    # dips below the true interleaver period, so try the strongest dips
+    # first rather than trusting the smallest significant L alone.
+    order = np.argsort(-sig[sig > sig_thr])
+    by_strength = [int(v) for v in signif_L[order]]
+    cand_Ps = []
+    for v in by_strength[:3] + [P]:
+        if v > 8 and v not in cand_Ps:
+            cand_Ps.append(v)
 
-    # --- helical hypotheses ----------------------------------------------
-    if not any(h.score > 4 * sig_thr for h in hyps):
-        for r, c in list(_factor_pairs(P))[:6]:
-            for step in range(1, min(r, 6)):
-                off, sig_gain = _align_and_test(
-                    bits, lambda b, r=r, c=c, st=step:
-                    helical_deinterleave(b, r, c, st), P, sig_thr)
-                if sig_gain > max(sig_thr, 2 * base_sig):
-                    hyps.append(InterleaverHypothesis(
-                        kind="helical", period=P,
-                        parameters={"rows": r, "cols": c, "step": step,
-                                    "offset": off},
-                        score=float(sig_gain) * 0.98))
+    for Pc in cand_Ps:
+        # --- block hypotheses (with block-phase alignment sweep) ----------
+        for r, c in _factor_pairs(Pc):
+            off, sig_gain = _align_and_test(
+                bits, lambda b, r=r, c=c: block_deinterleave(b, r, c),
+                Pc, sig_thr)
+            if sig_gain > max(sig_thr, 2 * base_sig):
+                hyps.append(InterleaverHypothesis(
+                    kind="block", period=Pc,
+                    parameters={"rows": r, "cols": c, "offset": off},
+                    score=float(sig_gain)))
 
-    # --- convolutional hypotheses -----------------------------------------
-    if not any(h.score > 4 * sig_thr for h in hyps):
-        for B in range(2, 17):
-            if P % B:
-                continue
-            for M in (1, 2, 4, 8, max(1, P // B)):
-                off, sig_gain = _align_and_test(
-                    bits, lambda b, B=B, M=M: conv_deinterleave(b, B, M),
-                    P, sig_thr, max_offsets=B * M if B * M < P else P)
-                if sig_gain > max(sig_thr, 2 * base_sig):
-                    hyps.append(InterleaverHypothesis(
-                        kind="convolutional", period=P,
-                        parameters={"branches": B, "delay": M, "offset": off},
-                        score=float(sig_gain) * 0.95))
+        # --- helical hypotheses -------------------------------------------
+        if not any(h.score > 4 * sig_thr for h in hyps):
+            for r, c in list(_factor_pairs(Pc))[:6]:
+                for step in range(1, min(r, 6)):
+                    off, sig_gain = _align_and_test(
+                        bits, lambda b, r=r, c=c, st=step:
+                        helical_deinterleave(b, r, c, st), Pc, sig_thr)
+                    if sig_gain > max(sig_thr, 2 * base_sig):
+                        hyps.append(InterleaverHypothesis(
+                            kind="helical", period=Pc,
+                            parameters={"rows": r, "cols": c, "step": step,
+                                        "offset": off},
+                            score=float(sig_gain) * 0.98))
+
+        # --- convolutional hypotheses ---------------------------------------
+        if not any(h.score > 4 * sig_thr for h in hyps):
+            for B in range(2, 17):
+                if Pc % B:
+                    continue
+                for M in (1, 2, 4, 8, max(1, Pc // B)):
+                    off, sig_gain = _align_and_test(
+                        bits, lambda b, B=B, M=M: conv_deinterleave(b, B, M),
+                        Pc, sig_thr, max_offsets=B * M if B * M < Pc else Pc)
+                    if sig_gain > max(sig_thr, 2 * base_sig):
+                        hyps.append(InterleaverHypothesis(
+                            kind="convolutional", period=Pc,
+                            parameters={"branches": B, "delay": M, "offset": off},
+                            score=float(sig_gain) * 0.95))
+        if any(h.score > 4 * sig_thr for h in hyps):
+            break
 
     if not hyps:
         # Period detected but no tested inverse revealed finer structure:
