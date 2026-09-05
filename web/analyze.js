@@ -815,17 +815,68 @@ function classifyModulation(I, Q, params) {
 }
 
 /* ------------------------------------------------------- orchestrator */
+const STAGE_TITLES = [
+  ["S0", "Ingestion & format detection"],
+  ["S1", "Conditioning"],
+  ["S2", "Signal detection (CFAR)"],
+  ["S3", "Channelisation"],
+  ["S4", "Parameter estimation"],
+  ["S5", "Modulation classification"],
+  ["S6", "Demodulation"],
+  ["S7", "Ambiguity fan-out & descrambling"],
+  ["S8", "Blind de-interleaving"],
+  ["S9", "Blind FEC identification"],
+  ["S10", "Framing & CRC"],
+  ["S11", "Payload intelligence"],
+  ["S12", "Reporting & export"],
+];
+
+function makeTrace() {
+  const entries = {};
+  return {
+    mark(stage, status, summary, elapsed) {
+      entries[stage] = { status, summary, elapsed_s: elapsed ?? null };
+    },
+    finalize(stopReason) {
+      return STAGE_TITLES.map(([sid, title]) => {
+        const e = entries[sid] || { status: "skipped",
+          summary: stopReason ||
+            "requires the desktop engine: rf-analyzer analyze <file>",
+          elapsed_s: null };
+        return { stage: sid, title, ...e };
+      });
+    },
+  };
+}
+
 function analyzeRecording(buffer, fileName, overrides, progressCb) {
   const prog = progressCb || (() => {});
+  const trace = makeTrace();
+  const tick = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
+  let t0 = tick();
   prog("S0 ingesting and sniffing the format", 0.05);
   const { report, I, Q } = ingest(buffer, fileName, overrides);
+  trace.mark("S0", "executed",
+    `${report.format} / ${report.datatype || "n/a"}, ` +
+    `${report.nSamples.toLocaleString()} samples, sample rate ` +
+    (report.sampleRate ? report.sampleRate.toLocaleString() + " Hz" : "unknown"),
+    +((tick() - t0) / 1000).toFixed(3));
 
+  t0 = tick();
   prog("S1 conditioning (DC, clipping, normalisation)", 0.2);
   const conditioning = conditionIQ(I, Q);
+  trace.mark("S1", "executed",
+    `DC removed, clipping ${(conditioning.clippingFraction * 100).toFixed(2)}%, ` +
+    "normalised to unit RMS", +((tick() - t0) / 1000).toFixed(3));
 
+  t0 = tick();
   prog("S2 waterfall and CFAR signal detection", 0.35);
   const wf = computeWaterfall(I, Q, 1024);
   const signals = detectSignals(wf, 8.0);
+  trace.mark("S2", "executed",
+    `${signals.length} signal(s) above threshold` +
+    (signals.length ? `; best SNR ${signals[0].snrDb} dB` : ""),
+    +((tick() - t0) / 1000).toFixed(3));
 
   const result = {
     generator: "rf-analyzer web (S0-S5); run the desktop CLI/GUI for the " +
@@ -857,15 +908,22 @@ function analyzeRecording(buffer, fileName, overrides, progressCb) {
   if (!signals.length) {
     result.warnings.push("no signals above the detection threshold; " +
       "analysis stopped after S2");
+    result.pipeline_trace = trace.finalize("stopped at S2: nothing detected");
     return result;
   }
 
   const segIdx = Math.min(overrides.signalIndex || 0, signals.length - 1);
   const seg = signals[segIdx];
   result.selectedSignal = segIdx;
+  t0 = tick();
   prog("S3 channelising the selected signal", 0.55);
   const ch = channelize(I, Q, seg);
+  trace.mark("S3", "executed",
+    `signal ${segIdx}: shifted ${seg.center >= 0 ? "+" : ""}${seg.center.toFixed(4)}, ` +
+    `${ch.I.length.toLocaleString()} samples after trim`,
+    +((tick() - t0) / 1000).toFixed(3));
 
+  t0 = tick();
   prog("S4 estimating parameters", 0.7);
   const obw = occupiedBandwidth(ch.I, ch.Q);
   const params = {
@@ -894,8 +952,17 @@ function analyzeRecording(buffer, fileName, overrides, progressCb) {
       +(params.symbolRate.rate * rateAtInput * report.sampleRate).toFixed(1);
   }
 
+  trace.mark("S4", "executed",
+    `Rs ${params.symbolRate.rate ?? "unknown"} (norm), ` +
+    `SNR ${params.snrDb} dB, OBW ${params.obw99 ?? "-"}`,
+    +((tick() - t0) / 1000).toFixed(3));
+
+  t0 = tick();
   prog("S5 classifying the modulation", 0.85);
   const mod = classifyModulation(ch.I, ch.Q, params);
+  trace.mark("S5", "executed",
+    `${mod.prediction} (confidence ${mod.confidence})`,
+    +((tick() - t0) / 1000).toFixed(3));
   result.modulation = {
     prediction: mod.prediction,
     confidence: mod.confidence,
@@ -910,6 +977,7 @@ function analyzeRecording(buffer, fileName, overrides, progressCb) {
       q: Array.from(mod.symbols.sQ.slice(0, m), (v) => +v.toFixed(4)),
     };
   }
+  result.pipeline_trace = trace.finalize();
   prog("done", 1.0);
   return result;
 }

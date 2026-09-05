@@ -1,145 +1,38 @@
-/* UI glue for analyze.html: file handling, rendering, signal re-selection. */
+/* UI glue for the in-browser analysis page. */
 "use strict";
 
-const $ = (id) => document.getElementById(id);
+const $ = UI.$;
 let currentBuffer = null, currentName = null, lastResult = null;
+const tabs = UI.initTabs("tabs", (name) => requestAnimationFrame(() => drawCharts(name)));
+const drawn = new Set();
 
-/* ---------- canvas helpers (shared style with viewer.js) ---------- */
-function ctx2d(id) {
-  const c = $(id);
-  const dpr = window.devicePixelRatio || 1;
-  const w = c.clientWidth || c.parentElement.clientWidth || 600;
-  c.width = w * dpr;
-  c.height = c.getAttribute("height") * dpr;
-  const ctx = c.getContext("2d");
-  ctx.scale(dpr, dpr);
-  return [ctx, w, +c.getAttribute("height")];
-}
-
-function lineChart(id, xs, ys, color) {
-  const [ctx, W, H] = ctx2d(id);
-  ctx.clearRect(0, 0, W, H);
-  if (!xs || !xs.length) return;
-  const xmin = Math.min(...xs), xmax = Math.max(...xs);
-  const ymin = Math.min(...ys), ymax = Math.max(...ys);
-  const px = (x) => 36 + (x - xmin) / (xmax - xmin || 1) * (W - 46);
-  const py = (y) => H - 22 - (y - ymin) / (ymax - ymin || 1) * (H - 34);
-  ctx.strokeStyle = "#30363d";
-  ctx.strokeRect(36, 8, W - 46, H - 30);
-  ctx.strokeStyle = color; ctx.lineWidth = 1.4; ctx.beginPath();
-  for (let i = 0; i < xs.length; i++)
-    i ? ctx.lineTo(px(xs[i]), py(ys[i])) : ctx.moveTo(px(xs[i]), py(ys[i]));
-  ctx.stroke();
-  ctx.fillStyle = "#9aa7b4"; ctx.font = "11px sans-serif";
-  ctx.fillText(xmin.toPrecision(3), 36, H - 8);
-  ctx.fillText(xmax.toPrecision(3), W - 60, H - 8);
-  ctx.fillText(ymax.toPrecision(3), 2, 16);
-  ctx.fillText(ymin.toPrecision(3), 2, H - 24);
-}
-
-function heatmap(id, matrix) {
-  const [ctx, W, H] = ctx2d(id);
-  ctx.clearRect(0, 0, W, H);
-  if (!matrix || !matrix.length) return;
-  const rows = matrix.length, cols = matrix[0].length;
-  let lo = Infinity, hi = -Infinity;
-  for (const row of matrix) for (const v of row) {
-    if (v < lo) lo = v; if (v > hi) hi = v;
-  }
-  const img = ctx.createImageData(cols, rows);
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const t = (matrix[r][c] - lo) / (hi - lo || 1);
-      const i = (r * cols + c) * 4;
-      img.data[i] = Math.min(255, 510 * Math.max(0, t - 0.5));
-      img.data[i + 1] = Math.min(255, 380 * t);
-      img.data[i + 2] = 90 + 165 * Math.min(1, t * 2) - 120 * Math.max(0, t - 0.6);
-      img.data[i + 3] = 255;
-    }
-  }
-  const off = new OffscreenCanvas(cols, rows);
-  off.getContext("2d").putImageData(img, 0, 0);
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(off, 0, 0, cols, rows, 0, 0, W, H);
-}
-
-function scatter(id, xs, ys, color) {
-  const [ctx, W, H] = ctx2d(id);
-  ctx.clearRect(0, 0, W, H);
-  if (!xs || !xs.length) return;
-  const m = Math.max(...xs.map(Math.abs), ...ys.map(Math.abs)) * 1.2 || 1;
-  const px = (x) => W / 2 + x / m * (Math.min(W, H) / 2 - 10);
-  const py = (y) => H / 2 - y / m * (Math.min(W, H) / 2 - 10);
-  ctx.strokeStyle = "#30363d";
-  ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2);
-  ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke();
-  ctx.fillStyle = color; ctx.globalAlpha = 0.45;
-  for (let i = 0; i < xs.length; i++)
-    ctx.fillRect(px(xs[i]) - 1.2, py(ys[i]) - 1.2, 2.4, 2.4);
-  ctx.globalAlpha = 1;
-}
-
-function kvTable(id, rows, headers) {
-  const t = $(id);
-  t.innerHTML = "";
-  if (headers) {
-    const tr = document.createElement("tr");
-    for (const h of headers) {
-      const th = document.createElement("th"); th.textContent = h;
-      tr.appendChild(th);
-    }
-    t.appendChild(tr);
-  }
-  for (const row of rows) {
-    const tr = document.createElement("tr");
-    for (const v of row) {
-      const td = document.createElement("td");
-      td.textContent = v === null || v === undefined ? "-" : String(v);
-      tr.appendChild(td);
-    }
-    t.appendChild(tr);
-  }
-  return t;
-}
-
-function badge(text, cls) {
-  return `<span class="badge ${cls}">${text}</span>`;
-}
-
-/* ---------- flow ---------- */
-function setupDrop() {
-  const drop = $("drop"), input = $("file");
+(function setup() {
+  const drop = $("drop");
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".wav,.iq,.bin,.raw,.sigmf-data,.cf32,.cs16,.cu8";
+  input.style.display = "none";
+  drop.appendChild(input);
   drop.addEventListener("click", () => input.click());
-  input.addEventListener("change", () => {
-    if (input.files.length) loadFile(input.files[0]);
-  });
-  drop.addEventListener("dragover", (e) => {
-    e.preventDefault(); drop.classList.add("hover");
-  });
+  input.addEventListener("change", () => input.files.length && load(input.files[0]));
+  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("hover"); });
   drop.addEventListener("dragleave", () => drop.classList.remove("hover"));
   drop.addEventListener("drop", (e) => {
     e.preventDefault(); drop.classList.remove("hover");
-    if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
+    if (e.dataTransfer.files.length) load(e.dataTransfer.files[0]);
   });
-  for (const id of ["ov_rate", "ov_cf", "ov_dtype"]) {
-    $(id).addEventListener("change", () => {
-      if (currentBuffer) run(0);
-    });
-  }
-}
+  for (const id of ["ov_rate", "ov_cf", "ov_dtype"])
+    $(id).addEventListener("change", () => currentBuffer && run(0));
+})();
 
-function loadFile(f) {
-  if (f.size > 256 * 1024 * 1024) {
-    alert("File larger than 256 MB: the browser engine analyses the first " +
-          "part only; for huge files use the desktop tool (memory-mapped).");
-  }
+function load(f) {
   const r = new FileReader();
-  $("status").textContent = "reading file...";
+  $("status").innerHTML = "reading file<span class='cursor'></span>";
   r.onload = () => {
     currentBuffer = r.result;
     currentName = f.name;
-    $("drop").textContent = `${f.name} (${(f.size / 1e6).toFixed(1)} MB) - ` +
-      "drop another file to replace";
+    $("drop").innerHTML = `<div class="big">${UI.esc(f.name)}</div>` +
+      `${(f.size / 1e6).toFixed(1)} MB loaded &mdash; drop another file to replace`;
     run(0);
   };
   r.readAsArrayBuffer(f.slice(0, 256 * 1024 * 1024));
@@ -154,17 +47,17 @@ function overrides(signalIndex) {
 }
 
 function run(signalIndex) {
-  $("status").textContent = "analysing...";
+  $("status").innerHTML = "analysing<span class='cursor'></span>";
   setTimeout(() => {
     try {
       const t0 = performance.now();
       const res = analyzeRecording(currentBuffer, currentName,
         overrides(signalIndex),
         (msg) => { $("status").textContent = msg; });
-      const dt = ((performance.now() - t0) / 1000).toFixed(1);
       lastResult = res;
-      $("status").textContent = `analysis finished in ${dt} s ` +
-        "(S0-S5 in-browser; bit layer runs in the desktop tool)";
+      $("status").innerHTML =
+        `analysis finished in ${((performance.now() - t0) / 1000).toFixed(1)} s ` +
+        `&mdash; S0-S5 in-browser; the bit layer (S6-S12) runs in the desktop engine`;
       render(res);
     } catch (e) {
       $("status").textContent = "analysis failed: " + e.message;
@@ -175,86 +68,138 @@ function run(signalIndex) {
 
 function render(r) {
   $("results").style.display = "block";
+  drawn.clear();
   const rec = r.recording;
-  kvTable("t_rec", [
-    ["file", currentName],
+
+  UI.renderPipeline("flow", r.pipeline_trace || [], {
+    detail: (sid) => stageDetail(sid, r), stepMs: 300 });
+
+  $("in_tiles").innerHTML =
+    UI.tile("format", UI.esc(rec.format),
+            UI.esc(rec.datatype || "") +
+            (rec.datatypeSource ? ` (${rec.datatypeSource})` : ""), true) +
+    UI.tile("sample rate", rec.sampleRate ?
+            `${(rec.sampleRate / 1e6).toFixed(3)} <small>Msps</small>` :
+            "unknown", rec.sampleRateSource || "") +
+    UI.tile("samples", rec.nSamples.toLocaleString(),
+            rec.duration ? rec.duration.toFixed(4) + " s" : "") +
+    UI.tile("signals found", String(r.signals.length),
+            r.signals.length ? `best SNR ${r.signals[0].snrDb} dB` : "");
+
+  UI.kvTable("t_rec", [
+    ["file", UI.esc(currentName)],
     ["format", rec.format],
-    ["datatype", rec.datatype + (rec.datatypeSource ? ` (${rec.datatypeSource})` : "")],
-    ["sample rate", rec.sampleRate
-      ? `${rec.sampleRate} Hz (${rec.sampleRateSource})`
-      : "unknown - normalised units in use; set it above for Hz"],
-    ["centre frequency", rec.centerFrequency || "-"],
-    ["samples analysed", rec.nSamples],
+    ["datatype", `${rec.datatype}` +
+      (rec.datatypeSource ? ` <span class="mono">(${rec.datatypeSource})</span>` : "")],
+    ["sample rate", rec.sampleRate ?
+      `${rec.sampleRate.toLocaleString()} Hz (${rec.sampleRateSource})` :
+      "unknown - set it in the overrides for absolute units"],
+    ["centre frequency", rec.centerFrequency ?
+      rec.centerFrequency.toLocaleString() + " Hz" : "-"],
     ["duration", rec.duration ? rec.duration.toFixed(4) + " s" : "-"],
   ]);
-  kvTable("t_sniff", (rec.sniff || []).slice(0, 4).map((s) =>
-    [s.dtype, s.confidence, s.explanation]),
-    rec.sniff ? ["candidate", "confidence", "evidence"] : null);
-
+  UI.kvTable("t_sniff", (rec.sniff || []).slice(0, 5).map((s) =>
+    [s.dtype, UI.meter(s.confidence), UI.esc(s.explanation)]),
+    rec.sniff ? ["candidate", "confidence", "evidence"] :
+    [["header-declared format", "", ""]]);
   const c = r.conditioning;
-  kvTable("t_cond", [
-    ["DC offset removed", `I ${c.dcOffset[0]}, Q ${c.dcOffset[1]}`],
-    ["clipping fraction", c.clippingFraction],
-    ["normalised to unit RMS", c.normalised],
+  UI.kvTable("t_cond", [
+    ["DC offset removed", `<span class="mono">I ${c.dcOffset[0]}, Q ${c.dcOffset[1]}</span>`],
+    ["clipping", `${(c.clippingFraction * 100).toFixed(3)}%` +
+      (c.clippingFraction > 1e-3 ? " " + UI.badge("CLIPPED", "warn") : "")],
+    ["normalisation", "unit RMS"],
   ]);
 
-  if (r.plots.psd) lineChart("psd", r.plots.psd.freq_norm, r.plots.psd.psd_db, "#4fc3f7");
-  if (r.plots.waterfall) heatmap("wf", r.plots.waterfall.db);
-
-  const t = kvTable("t_signals", r.signals.map((s) => [
-    s.id + (r.selectedSignal === s.id ? "  (selected)" : ""),
-    s.center.toFixed(4), s.bandwidth.toFixed(4),
-    rec.sampleRate ? Math.round(s.center * rec.sampleRate) : "-",
-    rec.sampleRate ? Math.round(s.bandwidth * rec.sampleRate) : "-",
-    s.snrDb,
-  ]), ["id", "centre (norm)", "bw (norm)", "centre Hz", "bw Hz", "SNR dB"]);
+  const t = UI.kvTable("t_signals", r.signals.map((s) => [
+    s.id, (+s.center).toFixed(4), (+s.bandwidth).toFixed(4),
+    rec.sampleRate ? Math.round(s.center * rec.sampleRate).toLocaleString() : "-",
+    rec.sampleRate ? Math.round(s.bandwidth * rec.sampleRate).toLocaleString() : "-",
+    `${s.snrDb} dB`,
+  ]), ["id", "centre (norm)", "bw (norm)", "centre Hz", "bw Hz", "SNR"]);
   Array.from(t.rows).forEach((row, i) => {
-    if (i === 0) return;
-    row.style.cursor = "pointer";
+    if (!i) return;
+    row.classList.add("clickable");
+    if (i - 1 === r.selectedSignal) row.classList.add("selected");
     row.addEventListener("click", () => run(i - 1));
   });
 
   const p = r.parameters || {};
-  kvTable("t_params", [
-    ["SNR (M2M4)", p.snr_db != null ? p.snr_db + " dB" : "-"],
-    ["occupied bandwidth (99%)", p.obw99_norm],
+  $("p_tiles").innerHTML =
+    UI.tile("symbol rate", p.symbol_rate_norm != null ?
+            (p.symbol_rate_hz ?
+             `${(p.symbol_rate_hz / 1e3).toFixed(2)} <small>kBd</small>` :
+             `${p.symbol_rate_norm} <small>norm</small>`) : "not found",
+            p.symbol_rate_confidence != null ?
+            `confidence ${p.symbol_rate_confidence}` : "", true) +
+    UI.tile("SNR (M2M4)", `${p.snr_db ?? "-"} <small>dB</small>`, "") +
+    UI.tile("occupied bw", `${p.obw99_norm ?? "-"}`, "99% power, normalised") +
+    UI.tile("envelope cv", `${p.envelope_cv ?? "-"}`,
+            "FSK <= 0.13 | PSK/QAM >= 0.27");
+  UI.kvTable("t_params", [
     ["carrier offset (norm)", p.carrier_offset_norm],
-    ["symbol rate (norm)", p.symbol_rate_norm != null
-      ? `${p.symbol_rate_norm} (confidence ${p.symbol_rate_confidence})` : "not found"],
-    ["symbol rate (Hz)", p.symbol_rate_hz || "-"],
     ["samples per symbol", p.samples_per_symbol],
-    ["envelope cv", p.envelope_cv + "  (FSK <= 0.13, shaped PSK/QAM >= 0.27)"],
-    ...(p.fsk ? [["FSK tones", `${p.fsk.toneCount} tones, deviation ` +
-                  `${p.fsk.deviation} (norm), mass ${p.fsk.massFraction}`]] : []),
+    ["symbol rate (norm)", p.symbol_rate_norm],
+    ["symbol rate (Hz)", p.symbol_rate_hz ? p.symbol_rate_hz.toLocaleString() : "-"],
+    ...(p.fsk ? [["FSK tones",
+      `${p.fsk.toneCount} tones, deviation ${p.fsk.deviation} norm, ` +
+      `mass ${p.fsk.massFraction}`]] : []),
   ]);
 
   const m = r.modulation || {};
-  let v = `<p style="font-size:1.4rem;font-weight:700">${m.prediction || "-"}` +
-    badge(`confidence ${m.confidence ?? "-"}`,
-          (m.confidence || 0) > 0.7 ? "good" : "warn") + "</p>";
-  for (const cst of m.constraints_applied || [])
-    v += `<p style="color:var(--dim);font-size:0.88rem">${cst}</p>`;
-  $("mod_verdict").innerHTML = v;
-  const modRows = (m.alternatives || []).map((a) => ["candidate", a[0], a[1]]);
-  for (const [eng, pred] of Object.entries(m.engine_predictions || {})) {
-    if (Array.isArray(pred)) modRows.push(["engine " + eng, pred[0], pred[1]]);
-    else modRows.push(["engine " + eng, JSON.stringify(pred), ""]);
-  }
-  kvTable("t_mod", modRows, ["source", "prediction", "score"]);
-
-  if (r.plots.constellation)
-    scatter("const", r.plots.constellation.i, r.plots.constellation.q, "#4fc3f7");
-  else {
-    const [ctx, W, H] = ctx2d("const");
-    ctx.clearRect(0, 0, W, H);
-    ctx.fillStyle = "#9aa7b4";
-    ctx.fillText("no symbol-spaced preview (FSK or no symbol rate)", 20, H / 2);
-  }
-
-  kvTable("t_warn", (r.warnings || []).map((w) => [w]));
+  $("mod_verdict").innerHTML =
+    `<span style="font:700 1.6rem var(--mono)">${UI.esc(m.prediction || "-")}</span> ` +
+    UI.meter(m.confidence || 0) +
+    (m.constraints_applied || []).map((cst) =>
+      `<div style="color:var(--ink2);font-size:0.82rem;margin-top:5px">` +
+      `${UI.esc(cst)}</div>`).join("");
+  const modRows = (m.alternatives || []).map((a) => ["candidate", a[0], UI.meter(a[1])]);
+  for (const [eng, pred] of Object.entries(m.engine_predictions || {}))
+    modRows.push(["engine " + eng,
+      Array.isArray(pred) ? pred[0] : `<span class="mono">${UI.esc(JSON.stringify(pred))}</span>`,
+      Array.isArray(pred) ? pred[1] : ""]);
+  UI.kvTable("t_mod", modRows, ["source", "prediction", "score"]);
+  UI.kvTable("t_warn", (r.warnings || []).map((w) => [UI.esc(w)]));
 
   const blob = new Blob([JSON.stringify(r, null, 2)], { type: "application/json" });
-  $("dl_json").href = URL.createObjectURL(blob);
+  $("dl_json").href = URL.createObjectURL ? URL.createObjectURL(blob) : "#";
+  tabs.show("pipeline");
 }
 
-setupDrop();
+function stageDetail(sid, r) {
+  const mk = (rows, headers) => {
+    if (!rows || !rows.length) return null;
+    const t = UI.el("table", "kv");
+    UI.kvTable(t, rows.slice(0, 12), headers);
+    return t;
+  };
+  if (sid === "S0") return mk((r.recording.sniff || []).map((s) =>
+    [s.dtype, s.confidence, UI.esc(s.explanation)]));
+  if (sid === "S1") return mk([["clipping", r.conditioning.clippingFraction],
+    ["dc", `<span class="mono">${r.conditioning.dcOffset.join(", ")}</span>`]]);
+  if (sid === "S2") return mk(r.signals.map((s) =>
+    [`signal ${s.id}`, `centre ${s.center.toFixed(4)}, bw ${s.bandwidth.toFixed(4)}, SNR ${s.snrDb} dB`]));
+  if (sid === "S4") return mk(Object.entries(r.parameters || {})
+    .filter(([k, v]) => v !== null && typeof v !== "object")
+    .map(([k, v]) => [k, v]));
+  if (sid === "S5") {
+    const m = r.modulation || {};
+    return mk([["prediction", `${m.prediction} (${m.confidence})`],
+      ...(m.alternatives || []).map((a) => ["candidate", `${a[0]}: ${a[1]}`])]);
+  }
+  return null;
+}
+
+function drawCharts(pane) {
+  if (!lastResult || drawn.has(pane)) return;
+  const plots = lastResult.plots || {};
+  if (pane === "spectrum") {
+    if (plots.psd) UI.lineChart("psd", plots.psd.freq_norm, plots.psd.psd_db,
+      { xlabel: "normalised frequency" });
+    if (plots.waterfall) UI.heatmap("wf", plots.waterfall.db);
+  } else if (pane === "modulation") {
+    if (plots.constellation)
+      UI.scatterChart("const", plots.constellation.i, plots.constellation.q);
+  } else return;
+  drawn.add(pane);
+}
+window.addEventListener("resize", () => drawn.clear());

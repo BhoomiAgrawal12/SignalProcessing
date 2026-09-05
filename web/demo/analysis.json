@@ -1,10 +1,10 @@
 {
-  "run_id": "20260903-145014-e28971",
-  "created": 1788427214.4526231,
+  "run_id": "20260905-160336-d16f73",
+  "created": 1788604416.265107,
   "recording": {
-    "file_path": "/Users/bhoomi/workspace/SIH 2026/rf-analyzer/examples/demo_signal.iq",
+    "file_path": "examples/demo_signal.iq",
     "format": "raw_iq",
-    "sample_rate": 1000000,
+    "sample_rate": 1000000.0,
     "sample_rate_source": "user",
     "center_frequency": null,
     "center_frequency_source": "unknown",
@@ -1189,10 +1189,825 @@
     "printable_fraction": 0.3199,
     "likely_encrypted": false
   },
+  "payload_intelligence": {
+    "available": true,
+    "version": 1,
+    "summary": {
+      "classification": "insufficient evidence",
+      "confidence": 0.4,
+      "strength": "WEAK"
+    },
+    "byte_forensics": {
+      "n_bytes": 497,
+      "n_bits": 3976,
+      "entropy_bits_per_byte": 6.2951,
+      "entropy_normalised": 0.7869,
+      "printable_ratio": 0.3199,
+      "null_ratio": 0.0,
+      "control_ratio": 0.163,
+      "unique_bytes": 122,
+      "most_common_bytes": [
+        {
+          "byte": "0x02",
+          "fraction": 0.1429
+        },
+        {
+          "byte": "0x74",
+          "fraction": 0.0181
+        },
+        {
+          "byte": "0x80",
+          "fraction": 0.0161
+        },
+        {
+          "byte": "0xbe",
+          "fraction": 0.0161
+        },
+        {
+          "byte": "0xd6",
+          "fraction": 0.0141
+        },
+        {
+          "byte": "0xda",
+          "fraction": 0.0141
+        },
+        {
+          "byte": "0xb0",
+          "fraction": 0.0141
+        },
+        {
+          "byte": "0xa0",
+          "fraction": 0.0141
+        }
+      ],
+      "entropy_windows": [
+        {
+          "offset": 0,
+          "entropy": 0.646
+        },
+        {
+          "offset": 64,
+          "entropy": 0.642
+        },
+        {
+          "offset": 128,
+          "entropy": 0.635
+        },
+        {
+          "offset": 192,
+          "entropy": 0.667
+        },
+        {
+          "offset": 256,
+          "entropy": 0.65
+        },
+        {
+          "offset": 320,
+          "entropy": 0.642
+        },
+        {
+          "offset": 384,
+          "entropy": 0.642
+        },
+        {
+          "offset": 448,
+          "entropy": 0.609
+        }
+      ],
+      "bit_analysis": {}
+    },
+    "text_decoding": [],
+    "encoding_candidates": [],
+    "structure": {
+      "periodicity": {
+        "found": true,
+        "period_bytes": 56,
+        "correlation": 0.663
+      },
+      "entropy_transitions": [],
+      "cross_frame": {
+        "available": true,
+        "n_frames": 71,
+        "width_bytes": 12,
+        "columns": [
+          {
+            "offset": 0,
+            "role": "constant",
+            "entropy": -0.0,
+            "note": "always 0xeb"
+          },
+          {
+            "offset": 1,
+            "role": "constant",
+            "entropy": -0.0,
+            "note": "always 0x90"
+          },
+          {
+            "offset": 2,
+            "role": "counter/monotonic",
+            "entropy": 0.769,
+            "note": "increases by 1"
+          },
+          {
+            "offset": 3,
+            "role": "constant",
+            "entropy": -0.0,
+            "note": "always 0x01"
+          },
+          {
+            "offset": 4,
+            "role": "payload/variable",
+            "entropy": 0.685
+          },
+          {
+            "offset": 5,
+            "role": "payload/variable",
+            "entropy": 0.683
+          },
+          {
+            "offset": 6,
+            "role": "payload/variable",
+            "entropy": 0.677
+          },
+          {
+            "offset": 7,
+            "role": "payload/variable",
+            "entropy": 0.684
+          },
+          {
+            "offset": 8,
+            "role": "payload/variable",
+            "entropy": 0.704
+          },
+          {
+            "offset": 9,
+            "role": "payload/variable",
+            "entropy": 0.689
+          },
+          {
+            "offset": 10,
+            "role": "payload/variable",
+            "entropy": 0.731
+          },
+          {
+            "offset": 11,
+            "role": "payload/variable",
+            "entropy": 0.737
+          }
+        ],
+        "fields": [
+          {
+            "start_byte": 0,
+            "length_bytes": 2,
+            "role": "constant",
+            "mean_entropy": 0.0,
+            "note": "always 0xeb"
+          },
+          {
+            "start_byte": 2,
+            "length_bytes": 1,
+            "role": "counter/monotonic",
+            "mean_entropy": 0.769,
+            "note": "increases by 1"
+          },
+          {
+            "start_byte": 3,
+            "length_bytes": 1,
+            "role": "constant",
+            "mean_entropy": 0.0,
+            "note": "always 0x01"
+          },
+          {
+            "start_byte": 4,
+            "length_bytes": 8,
+            "role": "payload/variable",
+            "mean_entropy": 0.699
+          }
+        ]
+      },
+      "fields": [
+        {
+          "start_byte": 0,
+          "length_bytes": 2,
+          "role": "constant",
+          "mean_entropy": 0.0,
+          "note": "always 0xeb"
+        },
+        {
+          "start_byte": 2,
+          "length_bytes": 1,
+          "role": "counter/monotonic",
+          "mean_entropy": 0.769,
+          "note": "increases by 1"
+        },
+        {
+          "start_byte": 3,
+          "length_bytes": 1,
+          "role": "constant",
+          "mean_entropy": 0.0,
+          "note": "always 0x01"
+        },
+        {
+          "start_byte": 4,
+          "length_bytes": 8,
+          "role": "payload/variable",
+          "mean_entropy": 0.699
+        }
+      ]
+    },
+    "compression": [],
+    "encryption_assessment": {
+      "category": "encryption",
+      "verdict": "insufficient evidence",
+      "confidence": 0.4,
+      "evidence": [
+        "entropy 0.79 bits/bit",
+        "deflate ratio 0.96"
+      ],
+      "limitations": [
+        "high entropy alone cannot distinguish encryption from compression or random data"
+      ],
+      "details": {
+        "entropy": 0.787,
+        "compress_ratio": 0.958
+      },
+      "strength": "WEAK"
+    },
+    "protocol_candidates": [],
+    "messages": {
+      "available": true,
+      "n_messages": 71,
+      "header_bytes": 4,
+      "messages": [
+        {
+          "index": 0,
+          "offset_bytes": 0,
+          "length_bytes": 12,
+          "header_hex": "eb900601",
+          "payload_hex": "6b70477b4b7af9e7",
+          "payload_text": "kpG{Kz\ufffd\ufffd"
+        },
+        {
+          "index": 1,
+          "offset_bytes": 12,
+          "length_bytes": 12,
+          "header_hex": "eb900701",
+          "payload_hex": "4826244130603ad9",
+          "payload_text": null
+        },
+        {
+          "index": 2,
+          "offset_bytes": 24,
+          "length_bytes": 12,
+          "header_hex": "eb900801",
+          "payload_hex": "3537367c6730fa29",
+          "payload_text": "576|g0\ufffd)"
+        },
+        {
+          "index": 3,
+          "offset_bytes": 36,
+          "length_bytes": 12,
+          "header_hex": "eb900901",
+          "payload_hex": "4e5d6540674d95af",
+          "payload_text": "N]e@gM\ufffd\ufffd"
+        },
+        {
+          "index": 4,
+          "offset_bytes": 48,
+          "length_bytes": 12,
+          "header_hex": "eb900a01",
+          "payload_hex": "416d4079603bc3ce",
+          "payload_text": null
+        },
+        {
+          "index": 5,
+          "offset_bytes": 60,
+          "length_bytes": 12,
+          "header_hex": "eb900b01",
+          "payload_hex": "343d6725704016f1",
+          "payload_text": null
+        },
+        {
+          "index": 6,
+          "offset_bytes": 72,
+          "length_bytes": 12,
+          "header_hex": "eb900c01",
+          "payload_hex": "696b2a473361f944",
+          "payload_text": "ik*G3a\ufffdD"
+        },
+        {
+          "index": 7,
+          "offset_bytes": 84,
+          "length_bytes": 12,
+          "header_hex": "eb900d01",
+          "payload_hex": "3531393b31468989",
+          "payload_text": "519;1F\ufffd\ufffd"
+        },
+        {
+          "index": 8,
+          "offset_bytes": 96,
+          "length_bytes": 12,
+          "header_hex": "eb900e01",
+          "payload_hex": "5c7b3669665ff1b0",
+          "payload_text": "\\{6if_\ufffd"
+        },
+        {
+          "index": 9,
+          "offset_bytes": 108,
+          "length_bytes": 12,
+          "header_hex": "eb900f01",
+          "payload_hex": "65394f612a214bbd",
+          "payload_text": "e9Oa*!K\ufffd"
+        },
+        {
+          "index": 10,
+          "offset_bytes": 120,
+          "length_bytes": 12,
+          "header_hex": "eb901001",
+          "payload_hex": "636b7c29463ded58",
+          "payload_text": "ck|)F=\ufffdX"
+        },
+        {
+          "index": 11,
+          "offset_bytes": 132,
+          "length_bytes": 12,
+          "header_hex": "eb901101",
+          "payload_hex": "474d3368415a492a",
+          "payload_text": "GM3hAZI*"
+        },
+        {
+          "index": 12,
+          "offset_bytes": 144,
+          "length_bytes": 12,
+          "header_hex": "eb901201",
+          "payload_hex": "5f6d49284961a7cf",
+          "payload_text": "_mI(Ia\ufffd\ufffd"
+        },
+        {
+          "index": 13,
+          "offset_bytes": 156,
+          "length_bytes": 12,
+          "header_hex": "eb901301",
+          "payload_hex": "2459774148626bd1",
+          "payload_text": "$YwAHbk\ufffd"
+        },
+        {
+          "index": 14,
+          "offset_bytes": 168,
+          "length_bytes": 12,
+          "header_hex": "eb901401",
+          "payload_hex": "375131286e692b54",
+          "payload_text": "7Q1(ni+T"
+        },
+        {
+          "index": 15,
+          "offset_bytes": 180,
+          "length_bytes": 12,
+          "header_hex": "eb901501",
+          "payload_hex": "3a666b23317569a3",
+          "payload_text": ":fk#1ui\ufffd"
+        },
+        {
+          "index": 16,
+          "offset_bytes": 192,
+          "length_bytes": 12,
+          "header_hex": "eb901601",
+          "payload_hex": "63444f65435a3c93",
+          "payload_text": "cDOeCZ<\ufffd"
+        },
+        {
+          "index": 17,
+          "offset_bytes": 204,
+          "length_bytes": 12,
+          "header_hex": "eb901701",
+          "payload_hex": "4070666e7749da8b",
+          "payload_text": "@pfnwI\u068b"
+        },
+        {
+          "index": 18,
+          "offset_bytes": 216,
+          "length_bytes": 12,
+          "header_hex": "eb901801",
+          "payload_hex": "3f576043582865e7",
+          "payload_text": "?W`CX(e\ufffd"
+        },
+        {
+          "index": 19,
+          "offset_bytes": 228,
+          "length_bytes": 12,
+          "header_hex": "eb901901",
+          "payload_hex": "715d2e3a202ff561",
+          "payload_text": null
+        },
+        {
+          "index": 20,
+          "offset_bytes": 240,
+          "length_bytes": 12,
+          "header_hex": "eb901a01",
+          "payload_hex": "36434a6e257ef0bb",
+          "payload_text": "6CJn%~\ufffd"
+        },
+        {
+          "index": 21,
+          "offset_bytes": 252,
+          "length_bytes": 12,
+          "header_hex": "eb901b01",
+          "payload_hex": "4521475f5d26f055",
+          "payload_text": null
+        },
+        {
+          "index": 22,
+          "offset_bytes": 264,
+          "length_bytes": 12,
+          "header_hex": "eb901c01",
+          "payload_hex": "7a4057222126a285",
+          "payload_text": null
+        },
+        {
+          "index": 23,
+          "offset_bytes": 276,
+          "length_bytes": 12,
+          "header_hex": "eb901d01",
+          "payload_hex": "2c62393a6b54f98c",
+          "payload_text": ",b9:kT\ufffd\ufffd"
+        },
+        {
+          "index": 24,
+          "offset_bytes": 288,
+          "length_bytes": 12,
+          "header_hex": "eb901e01",
+          "payload_hex": "6c40466d7b2ac631",
+          "payload_text": "l@Fm{*\ufffd1"
+        },
+        {
+          "index": 25,
+          "offset_bytes": 300,
+          "length_bytes": 12,
+          "header_hex": "eb901f01",
+          "payload_hex": "7a6d473a2b4c907c",
+          "payload_text": "zmG:+L\ufffd|"
+        },
+        {
+          "index": 26,
+          "offset_bytes": 312,
+          "length_bytes": 12,
+          "header_hex": "eb902001",
+          "payload_hex": "6a2f556d603dd21c",
+          "payload_text": null
+        },
+        {
+          "index": 27,
+          "offset_bytes": 324,
+          "length_bytes": 12,
+          "header_hex": "eb902101",
+          "payload_hex": "4c48407e562b333b",
+          "payload_text": "LH@~V+3;"
+        },
+        {
+          "index": 28,
+          "offset_bytes": 336,
+          "length_bytes": 12,
+          "header_hex": "eb902201",
+          "payload_hex": "6624484f2c7b1082",
+          "payload_text": null
+        },
+        {
+          "index": 29,
+          "offset_bytes": 348,
+          "length_bytes": 12,
+          "header_hex": "eb902301",
+          "payload_hex": "252b636853556194",
+          "payload_text": "%+chSUa\ufffd"
+        },
+        {
+          "index": 30,
+          "offset_bytes": 360,
+          "length_bytes": 12,
+          "header_hex": "eb902401",
+          "payload_hex": "752a4e364c750061",
+          "payload_text": "u*N6Lu\u0000a"
+        },
+        {
+          "index": 31,
+          "offset_bytes": 372,
+          "length_bytes": 12,
+          "header_hex": "eb902501",
+          "payload_hex": "4563276169557da0",
+          "payload_text": "Ec'aiU}\ufffd"
+        },
+        {
+          "index": 32,
+          "offset_bytes": 384,
+          "length_bytes": 12,
+          "header_hex": "eb902601",
+          "payload_hex": "373560356240806f",
+          "payload_text": "75`5b@\ufffdo"
+        },
+        {
+          "index": 33,
+          "offset_bytes": 396,
+          "length_bytes": 12,
+          "header_hex": "eb902701",
+          "payload_hex": "5b205d5f2d3c5f66",
+          "payload_text": null
+        },
+        {
+          "index": 34,
+          "offset_bytes": 408,
+          "length_bytes": 12,
+          "header_hex": "eb902801",
+          "payload_hex": "5831785a5537b62f",
+          "payload_text": "X1xZU7\ufffd/"
+        },
+        {
+          "index": 35,
+          "offset_bytes": 420,
+          "length_bytes": 12,
+          "header_hex": "eb902901",
+          "payload_hex": "51543a737274ffe0",
+          "payload_text": "QT:srt\ufffd\ufffd"
+        },
+        {
+          "index": 36,
+          "offset_bytes": 432,
+          "length_bytes": 12,
+          "header_hex": "eb902a01",
+          "payload_hex": "4d38764a295cb9b0",
+          "payload_text": "M8vJ)\\\ufffd\ufffd"
+        },
+        {
+          "index": 37,
+          "offset_bytes": 444,
+          "length_bytes": 12,
+          "header_hex": "eb902b01",
+          "payload_hex": "687b5f202f71b02a",
+          "payload_text": null
+        },
+        {
+          "index": 38,
+          "offset_bytes": 456,
+          "length_bytes": 12,
+          "header_hex": "eb902c01",
+          "payload_hex": "7032633d6e6197c5",
+          "payload_text": "p2c=na\ufffd\ufffd"
+        },
+        {
+          "index": 39,
+          "offset_bytes": 468,
+          "length_bytes": 12,
+          "header_hex": "eb902d01",
+          "payload_hex": "3a662b5f67654478",
+          "payload_text": ":f+_geDx"
+        },
+        {
+          "index": 40,
+          "offset_bytes": 480,
+          "length_bytes": 12,
+          "header_hex": "eb902e01",
+          "payload_hex": "61352624255949d5",
+          "payload_text": "a5&$%YI\ufffd"
+        },
+        {
+          "index": 41,
+          "offset_bytes": 492,
+          "length_bytes": 12,
+          "header_hex": "eb902f01",
+          "payload_hex": "345f5a4b225b6129",
+          "payload_text": "4_ZK\"[a)"
+        },
+        {
+          "index": 42,
+          "offset_bytes": 504,
+          "length_bytes": 12,
+          "header_hex": "eb903001",
+          "payload_hex": "20234651525ca75e",
+          "payload_text": " #FQR\\\ufffd^"
+        },
+        {
+          "index": 43,
+          "offset_bytes": 516,
+          "length_bytes": 12,
+          "header_hex": "eb903101",
+          "payload_hex": "50232a437a6686a4",
+          "payload_text": "P#*Czf\ufffd\ufffd"
+        },
+        {
+          "index": 44,
+          "offset_bytes": 528,
+          "length_bytes": 12,
+          "header_hex": "eb903201",
+          "payload_hex": "503e2e5c4a71a911",
+          "payload_text": null
+        },
+        {
+          "index": 45,
+          "offset_bytes": 540,
+          "length_bytes": 12,
+          "header_hex": "eb903301",
+          "payload_hex": "375433746d7d7552",
+          "payload_text": "7T3tm}uR"
+        },
+        {
+          "index": 46,
+          "offset_bytes": 552,
+          "length_bytes": 12,
+          "header_hex": "eb903401",
+          "payload_hex": "543b202d6f4e7fe1",
+          "payload_text": null
+        },
+        {
+          "index": 47,
+          "offset_bytes": 564,
+          "length_bytes": 12,
+          "header_hex": "eb903501",
+          "payload_hex": "7c7b6b65506994b1",
+          "payload_text": "|{kePi\ufffd\ufffd"
+        },
+        {
+          "index": 48,
+          "offset_bytes": 576,
+          "length_bytes": 12,
+          "header_hex": "eb903601",
+          "payload_hex": "44592a5e5d62d876",
+          "payload_text": "DY*^]b\ufffdv"
+        },
+        {
+          "index": 49,
+          "offset_bytes": 588,
+          "length_bytes": 12,
+          "header_hex": "eb903701",
+          "payload_hex": "5177726334383c3d",
+          "payload_text": "Qwrc48<="
+        },
+        {
+          "index": 50,
+          "offset_bytes": 600,
+          "length_bytes": 12,
+          "header_hex": "eb903801",
+          "payload_hex": "50703a297e28068e",
+          "payload_text": null
+        },
+        {
+          "index": 51,
+          "offset_bytes": 612,
+          "length_bytes": 12,
+          "header_hex": "eb903901",
+          "payload_hex": "6c42544f342e7ddd",
+          "payload_text": "lBTO4.}\ufffd"
+        },
+        {
+          "index": 52,
+          "offset_bytes": 624,
+          "length_bytes": 12,
+          "header_hex": "eb903a01",
+          "payload_hex": "503353743f5331a9",
+          "payload_text": "P3St?S1\ufffd"
+        },
+        {
+          "index": 53,
+          "offset_bytes": 636,
+          "length_bytes": 12,
+          "header_hex": "eb903b01",
+          "payload_hex": "344d44725f35028d",
+          "payload_text": "4MDr_5\u0002\ufffd"
+        },
+        {
+          "index": 54,
+          "offset_bytes": 648,
+          "length_bytes": 12,
+          "header_hex": "eb903c01",
+          "payload_hex": "4c41355b4267256e",
+          "payload_text": "LA5[Bg%n"
+        },
+        {
+          "index": 55,
+          "offset_bytes": 660,
+          "length_bytes": 12,
+          "header_hex": "eb903d01",
+          "payload_hex": "58575a6f40371f89",
+          "payload_text": "XWZo@7\u001f\ufffd"
+        },
+        {
+          "index": 56,
+          "offset_bytes": 672,
+          "length_bytes": 12,
+          "header_hex": "eb903e01",
+          "payload_hex": "3b56467338206de4",
+          "payload_text": ";VFs8 m\ufffd"
+        },
+        {
+          "index": 57,
+          "offset_bytes": 684,
+          "length_bytes": 12,
+          "header_hex": "eb903f01",
+          "payload_hex": "584a532b67445690",
+          "payload_text": "XJS+gDV\ufffd"
+        },
+        {
+          "index": 58,
+          "offset_bytes": 696,
+          "length_bytes": 12,
+          "header_hex": "eb904001",
+          "payload_hex": "7d5436606f7e94de",
+          "payload_text": null
+        },
+        {
+          "index": 59,
+          "offset_bytes": 708,
+          "length_bytes": 12,
+          "header_hex": "eb904101",
+          "payload_hex": "6e6c777e34473cdf",
+          "payload_text": "nlw~4G<\ufffd"
+        },
+        {
+          "index": 60,
+          "offset_bytes": 720,
+          "length_bytes": 12,
+          "header_hex": "eb904201",
+          "payload_hex": "3f277c4f207be8eb",
+          "payload_text": null
+        },
+        {
+          "index": 61,
+          "offset_bytes": 732,
+          "length_bytes": 12,
+          "header_hex": "eb904301",
+          "payload_hex": "44584766597ad938",
+          "payload_text": "DXGfYz\ufffd8"
+        },
+        {
+          "index": 62,
+          "offset_bytes": 744,
+          "length_bytes": 12,
+          "header_hex": "eb904401",
+          "payload_hex": "7e78287a45548796",
+          "payload_text": "~x(zET\ufffd\ufffd"
+        },
+        {
+          "index": 63,
+          "offset_bytes": 756,
+          "length_bytes": 12,
+          "header_hex": "eb904501",
+          "payload_hex": "4a425058713429cf",
+          "payload_text": "JBPXq4)\ufffd"
+        }
+      ]
+    },
+    "findings": [
+      {
+        "category": "structure",
+        "verdict": "constant header/marker region(s)",
+        "confidence": 0.85,
+        "evidence": [
+          "2 constant byte region(s) across 71 frames"
+        ],
+        "limitations": [],
+        "details": {},
+        "strength": "LIKELY"
+      },
+      {
+        "category": "structure",
+        "verdict": "sequence counter candidate",
+        "confidence": 0.8,
+        "evidence": [
+          "monotonically increasing byte column across frames"
+        ],
+        "limitations": [],
+        "details": {},
+        "strength": "LIKELY"
+      },
+      {
+        "category": "encryption",
+        "verdict": "insufficient evidence",
+        "confidence": 0.4,
+        "evidence": [
+          "entropy 0.79 bits/bit",
+          "deflate ratio 0.96"
+        ],
+        "limitations": [
+          "high entropy alone cannot distinguish encryption from compression or random data"
+        ],
+        "details": {
+          "entropy": 0.787,
+          "compress_ratio": 0.958
+        },
+        "strength": "WEAK"
+      }
+    ],
+    "provenance": {
+      "crc_validated": true,
+      "fec_syndrome_rate": 1.0,
+      "demod_locked": true
+    },
+    "limitations": [
+      "S11 interprets recovered bytes; it never invents meaning - unknown is a valid result"
+    ],
+    "elapsed_s": 0.002
+  },
   "hypotheses": [
     {
-      "id": "5dea326620e4",
-      "parent_id": "c2a6ca572a32",
+      "id": "fdbaf64dd4fa",
+      "parent_id": "98e60aa4c901",
       "stage": "fec",
       "assumptions": {
         "ambiguity": {
@@ -1223,16 +2038,110 @@
     }
   ],
   "stage_timings": {
-    "S0_ingest": 0.059,
+    "S0_ingest": 0.057,
     "S1_condition": 0.013,
     "S2_detect": 0.014,
     "S3_channelize": 0.003,
-    "S4_parameters": 0.069,
-    "S5_modulation": 1.297,
-    "S6_demodulate": 0.067,
-    "S7_ambiguity": 0.007,
-    "S8_S10_bitlayer": 3.403
+    "S4_parameters": 0.068,
+    "S5_modulation": 1.065,
+    "S6_demodulate": 0.049,
+    "S7_ambiguity": 0.004,
+    "S8_S10_bitlayer": 3.129,
+    "S11_payload_intel": 0.002
   },
+  "pipeline_trace": [
+    {
+      "stage": "S0",
+      "title": "Ingestion & format detection",
+      "status": "executed",
+      "summary": "raw_iq / complex64, 65,440 samples, sample rate 1,000,000 Hz",
+      "elapsed_s": 0.057
+    },
+    {
+      "stage": "S1",
+      "title": "Conditioning",
+      "status": "executed",
+      "summary": "DC removed, clipping 0.00%, IQ corrected",
+      "elapsed_s": 0.013
+    },
+    {
+      "stage": "S2",
+      "title": "Signal detection (CFAR)",
+      "status": "executed",
+      "summary": "2 signal(s) above threshold; best SNR 30.4 dB",
+      "elapsed_s": 0.014
+    },
+    {
+      "stage": "S3",
+      "title": "Channelisation",
+      "status": "executed",
+      "summary": "signal 0: shifted +0.0059, 59,392 samples after trim",
+      "elapsed_s": 0.003
+    },
+    {
+      "stage": "S4",
+      "title": "Parameter estimation",
+      "status": "executed",
+      "summary": "Rs 0.125 (norm), SNR 9.1 dB, OBW 0.1456298828125",
+      "elapsed_s": 0.068
+    },
+    {
+      "stage": "S5",
+      "title": "Modulation classification",
+      "status": "executed",
+      "summary": "QPSK (confidence 1.0)",
+      "elapsed_s": 1.065
+    },
+    {
+      "stage": "S6",
+      "title": "Demodulation",
+      "status": "executed",
+      "summary": "6,923 symbols, EVM 3.3%, locks T=True C=True",
+      "elapsed_s": 0.049
+    },
+    {
+      "stage": "S7",
+      "title": "Ambiguity fan-out & descrambling",
+      "status": "executed",
+      "summary": "16 candidate bit streams; descrambler PN9-CC1101",
+      "elapsed_s": 0.004
+    },
+    {
+      "stage": "S8",
+      "title": "Blind de-interleaving",
+      "status": "executed",
+      "summary": "interleaver: block {'rows': 8, 'cols': 16, 'offset': 10}",
+      "elapsed_s": 3.129
+    },
+    {
+      "stage": "S9",
+      "title": "Blind FEC identification",
+      "status": "executed",
+      "summary": "FEC: convolutional, syndrome-zero rate 1.0",
+      "elapsed_s": 3.129
+    },
+    {
+      "stage": "S10",
+      "title": "Framing & CRC",
+      "status": "executed",
+      "summary": "frames 96 bits, sync eb9000, CRC CRC-16-CCITT-FALSE",
+      "elapsed_s": 3.129
+    },
+    {
+      "stage": "S11",
+      "title": "Payload intelligence",
+      "status": "executed",
+      "summary": "insufficient evidence (WEAK, 0.4)",
+      "elapsed_s": 0.002
+    },
+    {
+      "stage": "S12",
+      "title": "Reporting & export",
+      "status": "ready",
+      "summary": "exports: JSON, CSV, payload, SigMF, PDF, GRC (rendered by CLI/GUI/web)",
+      "elapsed_s": null
+    }
+  ],
   "warnings": [],
   "plots": {
     "psd": {

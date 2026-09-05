@@ -89,8 +89,13 @@ rf-analyzer analyze recording.iq --sample-rate 2000000 -o out/
 rf-analyzer analyze recording.wav                     # rate from WAV header
 rf-analyzer analyze recording.iq --modulation BPSK    # analyst override
 rf-analyzer report out/analysis.json -o out2/         # re-render exports
-rf-analyzer synth test.iq --modulation QPSK --fec conv \
-    --interleaver block --scrambler pn9 --snr 20      # labelled test data
+rf-analyzer synth test.iq  --modulation QPSK --fec conv \
+    --interleaver block --scrambler pn9 --snr 20      # raw complex64 IQ
+rf-analyzer synth test.wav --sample-rate 1000000 \
+    --modulation QPSK --snr 25                        # stereo WAV (I/Q, f32)
+rf-analyzer synth test.sigmf --sample-rate 1000000 \
+    --centre-frequency 433920000 --modulation QPSK    # SigMF pair + truth
+rf-analyzer synth ldpc.iq --fec ldpc --snr 25         # LDPC-coded signal
 rf-analyzer signatures                                # signature library
 ```
 
@@ -138,6 +143,21 @@ Measured on an Apple M5 (10 cores), all report targets are met:
 | end-to-end, one clean signal (full stack) |   9.2 s  | < 90 s   |
 | 1 GB IQ file to first waterfall (memmap)  |   0.09 s | < 3 s    |
 
+## S11 payload intelligence
+
+After payload recovery, S11 answers "what do those bytes mean" with
+evidence, confidence bands (VALIDATED / LIKELY / POSSIBLE / WEAK) and
+explicit limitations: byte/bit forensics, conservative text decoding,
+Base64/hex/URL wrapper discovery, cross-frame field inference (constant
+headers, counters, length fields), compression detection with bounded
+real decompression, conservative encryption assessment (high entropy is
+never alone called encryption), validated protocol fingerprints (JSON,
+HTTP, IPv4 with checksum), and message reconstruction. Provenance is
+preserved: a payload recovered without CRC validation has its findings
+capped. Reporting (JSON/CSV/PDF/SigMF/GRC) is stage S12 and includes the
+S11 section; the web viewer renders it with an animated stage-by-stage
+pipeline flow recorded by the engine.
+
 ## Honest limitations
 
 - Absolute sample rate of headerless raw IQ cannot be estimated; it is
@@ -146,8 +166,9 @@ Measured on an Apple M5 (10 cores), all report targets are met:
   attempted; that is a successful outcome, not a failure.
 - Blind FEC/interleaver identification degrades above roughly 5% raw BER
   (fundamental to rank-based methods); improve demodulation first.
-- LDPC identification is limited to candidate-set syndrome matching and
-  is not yet wired into the default search.
+- LDPC identification uses candidate-set matching (known H matrices,
+  deterministic seeds or loaded standards); reconstruction of an
+  arbitrary unknown H remains out of scope and is stated in the result.
 - Pseudo-random interleavers: the period is detected, the permutation is
   reported unrecovered unless many aligned frames are available.
 - OFDM is detected and parameterised (FFT size, CP length) but not
