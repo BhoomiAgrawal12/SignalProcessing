@@ -231,9 +231,12 @@ class DemodulationResult:
     lock_metrics: dict = field(default_factory=dict)
     warnings: list = field(default_factory=list)
     eye_trace: np.ndarray = field(default=None, repr=False)
+    audio: np.ndarray = field(default=None, repr=False)
+    demodulation_status: str = "FAILED"      # GOOD | DEGRADED | FAILED
 
     def to_dict(self) -> dict:
         return {"modulation": self.modulation,
+                "demodulation_status": self.demodulation_status,
                 "n_symbols": 0 if self.symbols is None else int(len(self.symbols)),
                 "n_bits": 0 if self.hard_bits is None else int(len(self.hard_bits)),
                 "evm_percent": self.evm_percent,

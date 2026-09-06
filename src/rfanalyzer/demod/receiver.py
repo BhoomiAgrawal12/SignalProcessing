@@ -13,7 +13,7 @@ import numpy as np
 from scipy import signal as sig
 
 from ..common.models import DemodulationResult
-from .constellations import CONSTELLATIONS, slice_symbols
+from .constellations import CONSTELLATIONS, MOD_FAMILY, slice_symbols
 from .filters import rrc_taps
 
 
@@ -90,14 +90,21 @@ def _timing_recover(x: np.ndarray, sps: float,
         mu0, drift = float(coef[0]), float(coef[1])
     else:
         mu0, drift = float(mus[0]) if len(mus) else 0.0, 0.0
-    # symbol sampling instants
+    # symbol sampling instants, cubic Lagrange interpolation (linear
+    # interpolation leaves an ISI floor of several percent EVM, which is
+    # irrelevant for QPSK but fatal for 128/256-QAM decisions)
     n_sym = min((n - Q) // Q, max_symbols)
     kk = np.arange(n_sym)
     t = mu0 % Q + kk * (Q + drift * Q)
-    t = t[(t >= 0) & (t < n - 1)]
+    t = t[(t >= 1) & (t < n - 2)]
     i0 = t.astype(int)
     f = t - i0
-    syms = x[i0] * (1 - f) + x[i0 + 1] * f
+    xm1, x0, x1, x2 = x[i0 - 1], x[i0], x[i0 + 1], x[i0 + 2]
+    c0 = -f * (f - 1) * (f - 2) / 6
+    c1 = (f + 1) * (f - 1) * (f - 2) / 2
+    c2 = -(f + 1) * f * (f - 2) / 2
+    c3 = (f + 1) * f * (f - 1) / 6
+    syms = c0 * xm1 + c1 * x0 + c2 * x1 + c3 * x2
     locked = bool(tone > 0.02)
     return syms, tone, locked
 
@@ -114,13 +121,29 @@ def _dd_pll(symbols: np.ndarray, modulation: str, loop_bw: float = 0.02) -> tupl
     beta = 4 * theta * theta / d
     phase = 0.0
     freq = 0.0
-    if modulation in ("16QAM", "64QAM", "QPSK"):
-        # 4th-power feedforward initial phase (square constellations have
-        # E[s^4] at angle pi when axis-aligned); gives the DD loop a warm
-        # start so early wrong decisions don't stall convergence
+    # 4th-power feedforward warm start anchored to the constellation's OWN
+    # fourth moment: rotate so angle(E[y^4]) matches angle(E[table^4]).
+    # This is exact for square QAM, cross QAM and APSK alike (the old
+    # assumption of angle pi only held for square constellations).
+    ref4 = (table ** 4).mean()
+    if np.abs(ref4) > 0.05:
         c4 = (symbols[: 4096] ** 4).mean()
-        if np.abs(c4) > 0:
-            phase = float((np.angle(c4) - np.pi) / 4.0)
+        if np.abs(c4) > 1e-6:
+            phase = float((np.angle(c4) - np.angle(ref4)) / 4.0)
+    else:
+        # constellations with a vanishing 4th moment (APSK rings, dense
+        # PSK): probe a grid of rotations inside the constellation's own
+        # symmetry sector and start from the best-fitting one
+        sym_sector = np.pi / 2
+        probe = symbols[: 2048]
+        best_phi, best_d = 0.0, np.inf
+        for kk in range(16):
+            phi = kk * sym_sector / 16
+            rot = probe * np.exp(-1j * phi)
+            d = np.abs(rot[:, None] - table[None, :]).min(axis=1).mean()
+            if d < best_d:
+                best_d, best_phi = d, phi
+        phase = float(best_phi)
     out = np.empty_like(symbols)
     errs = np.empty(len(symbols))
     for i, s in enumerate(symbols):
@@ -136,33 +159,312 @@ def _dd_pll(symbols: np.ndarray, modulation: str, loop_bw: float = 0.02) -> tupl
     return out, float(np.sqrt((tail ** 2).mean())), bool(np.abs(tail).mean() < 0.35)
 
 
+# CFO estimation strategy per family: (nonlinearity order, use limiter).
+# The hard limiter sharpens PSK lines but destroys amplitude structure, so
+# QAM/APSK/ASK run without it. High-order PSK lines (x^16, x^32) are weak
+# but usable at the SNRs where those modulations decode at all.
+_CFO_STRATEGY = {
+    "psk": lambda order: (min(order, 32), True),
+    "oqpsk": lambda order: (4, True),
+    "qam": lambda order: (4, False),
+    "apsk": lambda order: (4, False),
+    "ask": lambda order: (2, False),
+}
+
+# EVM thresholds (percent) for the quality gate: (good, degraded) per
+# modulation; anything worse is FAILED. Denser constellations need lower
+# EVM to decode, so their gates are tighter.
+_EVM_GATES = {
+    "BPSK": (25, 45), "QPSK": (18, 32), "OQPSK": (18, 32), "8PSK": (12, 22),
+    "16PSK": (7, 13), "32PSK": (4, 8),
+    "OOK": (30, 50), "4ASK": (15, 28), "8ASK": (8, 16),
+    "16QAM": (12, 20), "32QAM": (9, 16), "64QAM": (7, 12),
+    "128QAM": (5, 9), "256QAM": (3.5, 7),
+    "16APSK": (10, 18), "32APSK": (8, 14), "64APSK": (7, 11),
+    "128APSK": (6, 10),
+}
+
+
+def _order_of(modulation: str) -> int:
+    table, k = CONSTELLATIONS[modulation]
+    return len(table)
+
+
+def _apply_status(res: DemodulationResult, modulation: str):
+    """Mandatory S6 quality gate: GOOD / DEGRADED / FAILED from EVM and
+    lock metrics. A FAILED demodulation must not feed the bit layer."""
+    gate = _EVM_GATES.get(modulation)
+    if gate is None:                      # fsk/gmsk/analog set it themselves
+        return
+    evm = res.evm_percent
+    locked = res.timing_locked and res.carrier_locked
+    if evm is None or not locked:
+        res.demodulation_status = "FAILED"
+        res.warnings.append("no synchronisation lock: bit stream withheld")
+        return
+    good, degraded = gate
+    if evm <= good:
+        res.demodulation_status = "GOOD"
+    elif evm <= degraded:
+        res.demodulation_status = "DEGRADED"
+        res.warnings.append(
+            f"EVM {evm}% is marginal for {modulation}: downstream results "
+            "are speculative")
+    else:
+        res.demodulation_status = "FAILED"
+        res.warnings.append(
+            f"EVM {evm}% is too poor to slice {modulation} reliably: "
+            "bit stream withheld from the bit layer")
+    res.lock_metrics["evm_gate_good"] = good
+    res.lock_metrics["evm_gate_degraded"] = degraded
+    # EVM-implied SNR: honest quality figure alongside the M2M4 estimate
+    if evm and evm > 0:
+        res.lock_metrics["snr_from_evm_db"] = round(
+            -20 * np.log10(evm / 100.0), 1)
+
+
+def _ring_info(table: np.ndarray) -> list:
+    """[(radius, n_points)] rings of a constellation (for APSK checks)."""
+    radii = np.abs(table)
+    rings = []
+    for r in sorted(set(np.round(radii, 3))):
+        rings.append((float(r), int(np.sum(np.abs(radii - r) < 1e-3))))
+    return rings
+
+
+def _nearest_distance(syms: np.ndarray, table: np.ndarray,
+                      n_probe: int = 2048) -> float:
+    """Mean distance to the nearest constellation point (unit-power
+    domain). Independent of any spectral-line statistic, so it can
+    arbitrate between candidate CFO lines without circularity."""
+    z = syms[: n_probe]
+    return float(np.abs(z[:, None] - table[None, :]).min(axis=1).mean())
+
+
+def _rotational_concentration(syms: np.ndarray, modulation: str,
+                              family: str) -> float:
+    """True carrier-lock evidence: nearest-point EVM is blind to a
+    spinning dense-PSK ring, but |E[(s/|s|)^M]| collapses to ~0 when the
+    constellation rotates. For APSK the dominant ring's point count sets
+    M; for QAM the 4th moment is compared to the table's own."""
+    table, _k = CONSTELLATIONS[modulation]
+    u = syms / (np.abs(syms) + 1e-12)
+    if family in ("psk", "oqpsk"):
+        M = len(table) if family == "psk" else 4
+        return float(np.abs((u ** M).mean()))
+    if family == "apsk":
+        rings = _ring_info(table)
+        radius, n_pts = max(rings, key=lambda rn: rn[1])
+        band = np.abs(np.abs(syms) - radius) < 0.25 * radius
+        if band.sum() < 32:
+            return 0.0
+        return float(np.abs((u[band] ** n_pts).mean()))
+    # QAM: a moment-based check is circular with the CFO line selection,
+    # so lock evidence comes from geometry: on-grid symbols sit much
+    # closer to the table than the same symbols rotated off-grid
+    d_meas = _nearest_distance(syms, table)
+    d_off = _nearest_distance(syms * np.exp(1j * np.pi / 8), table)
+    return float(np.clip((d_off - d_meas) / (d_off + 1e-12), 0.0, 1.0) /
+                 0.6)
+
+
+def _vv_feedforward(syms: np.ndarray, modulation: str, family: str,
+                    block: int = 192) -> np.ndarray:
+    """Viterbi&Viterbi-style block feedforward carrier recovery.
+
+    Per block, the constellation's rotational statistic (u^M for PSK,
+    s^4 against the table reference for QAM/APSK) yields a phase estimate;
+    estimates are unwrapped across blocks and interpolated. Being
+    feedforward, it cannot cycle-slip - the residual constant M-fold
+    ambiguity is exactly what the S7 fan-out enumerates."""
+    table, _k = CONSTELLATIONS[modulation]
+    order = len(table)
+    if family in ("psk", "oqpsk"):
+        M = order if family == "psk" else 4
+        z = (syms / (np.abs(syms) + 1e-12)) ** M
+        ref_angle = float(np.angle((table / np.abs(table)) [0] ** 0)) * 0
+        zref = ((table / np.abs(table)) ** M).mean()
+        ref_angle = float(np.angle(zref)) if np.abs(zref) > 1e-6 else 0.0
+    else:
+        M = 4
+        z = syms ** 4
+        zref = (table ** 4).mean()
+        if np.abs(zref) < 0.02:
+            # no usable 4th-moment reference (dense APSK): use the
+            # dominant ring's point count on ring-gated symbols
+            rings = _ring_info(table)
+            radius, n_pts = max(rings, key=lambda rn: rn[1])
+            M = n_pts
+            gate = np.abs(np.abs(syms) - radius) < 0.3 * radius
+            u = syms / (np.abs(syms) + 1e-12)
+            z = np.where(gate, u ** M, 0)
+            tri = table[np.abs(np.abs(table) - radius) < 1e-3]
+            zref = ((tri / np.abs(tri)) ** M).mean()
+        ref_angle = float(np.angle(zref)) if np.abs(zref) > 1e-6 else 0.0
+
+    n_blocks = max(1, len(z) // block)
+    centers, angles = [], []
+    for b in range(n_blocks):
+        zz = z[b * block:(b + 1) * block]
+        m = zz[zz != 0].mean() if np.any(zz != 0) else 0
+        if np.abs(m) < 1e-9:
+            continue
+        centers.append(b * block + block / 2)
+        angles.append(np.angle(m) - ref_angle)
+    if len(angles) < 1:
+        return syms
+    ang = np.array(angles, dtype=float)
+    # unwrap in the M-fold sector
+    for i in range(1, len(ang)):
+        while ang[i] - ang[i - 1] > np.pi:
+            ang[i] -= 2 * np.pi
+        while ang[i] - ang[i - 1] < -np.pi:
+            ang[i] += 2 * np.pi
+    phi = np.interp(np.arange(len(syms)), centers, ang / M)
+    return syms * np.exp(-1j * phi)
+
+
+def _symbol_domain_cfo(syms: np.ndarray, modulation: str,
+                       family: str) -> tuple:
+    """Residual CFO estimation on symbol-spaced samples.
+
+    After timing recovery the samples are ISI-free, so the M-power
+    spectral line is far cleaner than in the oversampled domain - this is
+    what makes 16/32-PSK and APSK lockable at all (their sample-domain
+    x^16/x^32 lines drown in shaping sidelobes).
+    Returns (corrected symbols, applied freq cycles/symbol, line quality).
+    """
+    table, _k = CONSTELLATIONS[modulation]
+    order = len(table)
+    if family in ("psk", "oqpsk"):
+        Ms = [order if family == "psk" else 4]
+    elif family == "apsk":
+        Ms = [n for _r, n in _ring_info(table)] + [4]
+    elif family == "ask":
+        Ms = [2]
+    else:
+        Ms = [4]
+    u = syms / (np.abs(syms) + 1e-12)
+    n = len(u)
+    nfft = 1 << int(np.ceil(np.log2(max(1024, 4 * n))))
+    w = np.hanning(n)
+    # Candidate lines can be DATA lines (frame periodicity puts spectral
+    # lines into u^M as well), so every candidate is validated by the
+    # rotational concentration it produces after correction - the true
+    # CFO line freezes the constellation, a data line does not.
+    kk = np.arange(n)
+    cands = [(0.0, 0.0)]
+    for M in sorted(set(Ms)):
+        if M < 2 or M > 64:
+            continue
+        base = u if family in ("psk", "oqpsk", "apsk") else syms
+        z = (base ** M) * w
+        Z = np.abs(np.fft.fft(z, nfft))
+        med = float(np.median(Z))
+        # the concentration validation below rejects junk candidates, so
+        # even modest lines are worth evaluating (dense QAM's s^4 line is
+        # real but only a few times the noise median)
+        order_idx = np.argsort(Z)[::-1][:10]
+        for k in order_idx:
+            quality = float(Z[k] / (med + 1e-12))
+            if quality < 2.5:
+                break
+            f = float(np.fft.fftfreq(nfft)[int(k)] / M)
+            if abs(f) < 0.45:
+                cands.append((f, quality))
+    # arbitrate candidates by independent geometric evidence: the true
+    # correction puts the probe symbols closest to the constellation
+    # (validating with the same M-power statistic would be circular)
+    table_full, _kk2 = CONSTELLATIONS[modulation]
+    best_f, best_d, best_q = 0.0, np.inf, 0.0
+    for f, q in cands:
+        trial = syms[: 2048] * np.exp(-2j * np.pi * f * kk[: 2048]) if f \
+            else syms[: 2048]
+        # constant rotation must not penalise a correct frequency: align
+        # the probe's best constant phase first (cheap grid search)
+        d = min(_nearest_distance(trial * np.exp(-1j * ph), table_full,
+                                  1024)
+                for ph in np.linspace(0, np.pi / 2, 12, endpoint=False))
+        if d < best_d - 1e-6:
+            best_f, best_d, best_q = f, d, q
+    if best_f:
+        syms = syms * np.exp(-2j * np.pi * best_f * kk)
+    return syms, best_f, best_q
+
+
+def _phase_polish(symbols: np.ndarray, modulation: str,
+                  window: int = 129) -> np.ndarray:
+    """Feedforward fine phase correction: decision-directed error smoothed
+    over a sliding window. Removes the residual jitter feedback loops
+    leave on dense constellations (128/256-QAM, high-order APSK)."""
+    table, _ = CONSTELLATIONS[modulation]
+    d2 = np.abs(symbols[:, None] - table[None, :])
+    dec = table[np.argmin(d2, axis=1)]
+    err = np.angle(symbols * np.conj(dec))
+    kernel = np.ones(window) / window
+    trend = np.convolve(err, kernel, mode="same")
+    return symbols * np.exp(-1j * trend)
+
+
 def demodulate(x: np.ndarray, modulation: str, sps: float,
                config, cfo_norm: float = None) -> DemodulationResult:
-    """Auto-configured demodulation of a channelised baseband signal."""
+    """Auto-configured demodulation, dispatched by modulation family.
+
+    Families: psk / oqpsk / qam / apsk / ask (linear chain with
+    family-specific CFO and carrier settings), fsk, gmsk (frequency
+    discriminator chain), analog (AM/FM/SSB detectors producing audio,
+    not bits). Every path ends in the mandatory quality gate that sets
+    res.demodulation_status."""
     x = np.asarray(x, dtype=np.complex128)
+    family = MOD_FAMILY.get(modulation)
     res = DemodulationResult(modulation=modulation, samples_per_symbol=sps)
+    res.demodulation_status = "FAILED"
 
-    if modulation.endswith("FSK"):
-        return _demod_fsk(x, modulation, sps, res)
-    if modulation not in CONSTELLATIONS:
-        res.warnings.append(f"unsupported modulation for demodulation: {modulation}")
+    if family == "analog":
+        return _demod_analog(x, modulation, res)
+    if family == "gmsk":
+        return _demod_gmsk(x, sps, res)
+    if family == "fsk" or (modulation.endswith("FSK") and
+                           modulation[0].isdigit()):
+        out = _demod_fsk(x, modulation, sps, res)
+        out.demodulation_status = ("GOOD" if out.timing_locked else "DEGRADED")
+        if out.hard_bits is None or not len(out.hard_bits):
+            out.demodulation_status = "FAILED"
+        return out
+    if family not in ("psk", "oqpsk", "qam", "apsk", "ask"):
+        res.warnings.append(f"unsupported modulation for demodulation: "
+                            f"{modulation}")
         return res
+    return _demod_linear(x, modulation, family, sps, config, cfo_norm, res)
 
-    is_qam = modulation.endswith("QAM")
-    order = {"BPSK": 2, "QPSK": 4, "8PSK": 8}.get(modulation, 4)
-    # 1. coarse CFO for the *known* modulation. The upstream S4 estimate
-    # had to guess the nonlinearity order and can lock a spurious line, so
-    # PSK applies it then refines, while QAM (whose x^4 line is reliable
-    # only without a limiter) estimates from scratch.
+
+def _demod_linear(x, modulation, family, sps, config, cfo_norm, res):
+    order = _order_of(modulation)
+    m_order, limiter = _CFO_STRATEGY[family](order)
+
+    # 1. coarse CFO: upstream estimate for LOW-order constant-modulus
+    # families only (the S4 estimator guesses the nonlinearity order and
+    # its spurious lines would poison high-order PSK), then a
+    # family-appropriate M-power refinement; the precise correction
+    # happens later in the symbol domain where the line is clean.
     n = np.arange(len(x))
     cfo = 0.0
-    if not is_qam and cfo_norm:
+    if family in ("psk", "oqpsk") and cfo_norm and order <= 8:
         cfo = float(cfo_norm)
         x = x * np.exp(-2j * np.pi * cfo * n)
-    resid = _coarse_cfo(x, order, limiter=not is_qam)
-    if abs(resid) < 0.05:
-        x = x * np.exp(-2j * np.pi * resid * n)
-        cfo += resid
+    # Sample-domain M-power refinement only where the line is reliable:
+    # for dense PSK and APSK the x^M line drowns in shaping sidelobes and
+    # a wrong "correction" here poisons the whole chain (timing itself is
+    # CFO-invariant, and the symbol-domain estimator after timing is far
+    # more sensitive), so those families skip it entirely.
+    sample_cfo_reliable = (family in ("psk", "oqpsk") and order <= 8) or \
+        family == "ask"
+    if sample_cfo_reliable:
+        resid = _coarse_cfo(x, m_order, limiter=limiter)
+        if abs(resid) < 0.05:
+            x = x * np.exp(-2j * np.pi * resid * n)
+            cfo += resid
+        res.lock_metrics["residual_cfo_est"] = round(float(resid), 6)
     res.cfo_applied_norm = float(cfo)
 
     # 2. matched filter
@@ -170,13 +472,36 @@ def demodulate(x: np.ndarray, modulation: str, sps: float,
     taps = rrc_taps(n_int, config.rrc_span_symbols, config.rrc_rolloff)
     x = sig.fftconvolve(x, taps, mode="same")
 
-    # keep a short matched-filtered trace for the eye diagram display
-    q_eye = max(2, int(round(sps)))
+    # 2b. OQPSK: advance the quadrature rail by half a symbol so both
+    # rails share the same optimum sampling instant
+    if family == "oqpsk":
+        half = n_int // 2
+        qadv = np.empty_like(x.imag)
+        qadv[:-half] = x.imag[half:]
+        qadv[-half:] = x.imag[-1]
+        x = x.real + 1j * qadv
+
+    # eye-diagram trace for the display
+    q_eye = max(2, n_int)
     res.lock_metrics["eye_sps"] = q_eye
     res.eye_trace = np.asarray(x[: 200 * q_eye], dtype=np.complex64)
 
-    # 3. timing recovery (feedforward Oerder&Meyr)
+    # 3. timing recovery (feedforward Oerder&Meyr). OQPSK's staggered
+    # rails weaken the |x|^2 symbol tone, so the upstream rate estimate
+    # can be off: when the tone is weak, retry with the strongest
+    # envelope-spectrum candidates and keep the best tone.
     syms, tone, tlock = _timing_recover(x, sps, config.max_symbols)
+    if tone < 0.02 and family == "oqpsk":
+        from ..params.estimators import symbol_rate as _sr
+        for cand in (_sr(x, 1e-3).get("candidates") or [])[:3]:
+            sps_c = 1.0 / cand["rate_norm"]
+            if not (2 <= sps_c <= 64):
+                continue
+            syms_c, tone_c, tlock_c = _timing_recover(x, sps_c,
+                                                      config.max_symbols)
+            if tone_c > tone:
+                syms, tone, tlock = syms_c, tone_c, tlock_c
+                res.samples_per_symbol = sps_c
     res.timing_locked = tlock
     res.lock_metrics["timing_tone_strength"] = round(tone, 4)
     if len(syms) < 32:
@@ -186,24 +511,217 @@ def demodulate(x: np.ndarray, modulation: str, sps: float,
     # 4. AGC
     syms = syms / (np.sqrt((np.abs(syms) ** 2).mean()) + 1e-12)
 
-    # 5. carrier recovery
-    syms, perr, clock = _dd_pll(syms, modulation, config.carrier_loop_bw)
+    # 4b. symbol-domain residual CFO (clean M-power line on ISI-free
+    # samples; essential for 16/32-PSK and APSK)
+    syms, f_resid, line_q = _symbol_domain_cfo(syms, modulation, family)
+    res.lock_metrics["symbol_cfo_per_symbol"] = round(f_resid, 7)
+    res.lock_metrics["symbol_cfo_line_quality"] = round(line_q, 1)
+
+    # 5. carrier recovery.
+    # Low-order constellations use the decision-directed PLL (fast, tracks
+    # residual frequency). Dense PSK / APSK / dense QAM use slip-free
+    # feedforward Viterbi&Viterbi blocks followed by a decision-directed
+    # polish; a feedback loop WILL cycle-slip on these and scramble the
+    # bit stream even while the EVM still looks fine.
+    dense = (family == "psk" and order >= 16) or family == "apsk" or \
+        (family in ("qam",) and order >= 128)
+    if family == "ask":
+        # align the PAM line onto the real axis via the second moment
+        c2 = (syms[:4096] ** 2).mean()
+        syms = syms * np.exp(-1j * np.angle(c2) / 2)
+        syms, perr, clock = _dd_pll(syms, modulation, 0.005)
+    elif dense and family == "qam":
+        # dense QAM: after the symbol-domain CFO the only unknown is a
+        # constant phase. Decision-directed loops and per-block VV both
+        # ADD noise here (the s^4 statistic and the decisions are equally
+        # unreliable per block), so the phase is found by a fine grid
+        # search on nearest-constellation distance and only a very slow
+        # feedforward polish tracks residual drift.
+        table, _ktab = CONSTELLATIONS[modulation]
+        grid = np.linspace(0, np.pi / 2, 96, endpoint=False)
+        probe = syms[: 1024]
+        best_ph = min(grid, key=lambda ph: _nearest_distance(
+            probe * np.exp(-1j * ph), table, 1024))
+        syms = syms * np.exp(-1j * best_ph)
+        syms = _phase_polish(syms, modulation, 401)
+        syms = _phase_polish(syms, modulation, 201)
+        d2 = np.abs(syms[:, None] - table[None, :])
+        dec = table[np.argmin(d2, axis=1)]
+        errs = np.angle(syms * np.conj(dec))
+        perr = float(np.sqrt(np.mean(errs[len(errs) // 2:] ** 2)))
+        clock = bool(np.abs(errs).mean() < 0.35)
+    elif dense:
+        table, _ktab = CONSTELLATIONS[modulation]
+        syms = _vv_feedforward(syms, modulation, family)
+        if family == "apsk":
+            # the VV anchor rides the dominant ring, which fixes phase
+            # only modulo that ring's own symmetry (e.g. 30 deg for a
+            # 12-point ring) - finer than the full constellation's 90 deg
+            # symmetry, so the residual k*(2pi/M_ring) rotation must be
+            # resolved against the WHOLE table
+            rings = _ring_info(table)
+            m_dom = max(rings, key=lambda rn: rn[1])[1]
+            probe = syms[: 3072]
+            best_phi, best_d = 0.0, np.inf
+            for kk2 in range(m_dom):
+                phi = kk2 * 2 * np.pi / m_dom
+                rot = probe * np.exp(-1j * phi)
+                d = np.abs(rot[:, None] - table[None, :]).min(axis=1).mean()
+                if d < best_d:
+                    best_d, best_phi = d, phi
+            if best_phi:
+                syms = syms * np.exp(-1j * best_phi)
+        syms = _phase_polish(syms, modulation, 201)
+        syms = _phase_polish(syms, modulation, 65)
+        # residual phase error metric from decisions
+        d2 = np.abs(syms[:, None] - table[None, :])
+        dec = table[np.argmin(d2, axis=1)]
+        errs = np.angle(syms * np.conj(dec))
+        perr = float(np.sqrt(np.mean(errs[len(errs) // 2:] ** 2)))
+        clock = bool(np.abs(errs).mean() < 0.35)
+    else:
+        loop_bw = config.carrier_loop_bw
+        syms, perr, clock = _dd_pll(syms, modulation, loop_bw)
+        if order >= 16:
+            syms, perr2, clock2 = _dd_pll(syms, modulation, loop_bw / 4)
+            perr = min(perr, perr2)
+            clock = clock or clock2
+        if order >= 64:
+            syms = _phase_polish(syms, modulation)
+    # rotational concentration: the lock metric nearest-point EVM cannot
+    # fake (a spinning ring reads as concentration ~0)
+    conc = _rotational_concentration(syms, modulation, family)
+    res.lock_metrics["rotational_concentration"] = round(conc, 3)
+    if conc < 0.2:
+        clock = False
     res.carrier_locked = clock
     res.lock_metrics["phase_error_rms"] = round(perr, 4)
 
-    # drop PLL convergence transient
     settle = min(len(syms) // 10, 500)
     syms = syms[settle:]
 
-    # 6. slice
+    # 6. slice to hard bits + LLRs
     noise_var = max(1e-4, float(np.var(np.abs(syms)) * 0.5))
     hard, llrs, evm = slice_symbols(syms, modulation, noise_var)
     res.symbols = syms.astype(np.complex64)
     res.hard_bits = hard
     res.llrs = llrs
     res.evm_percent = round(evm, 1)
-    if not (tlock and clock):
-        res.warnings.append("synchronisation lock is weak; bit stream may be unreliable")
+    _apply_status(res, modulation)
+    return res
+
+
+def _demod_gmsk(x, sps, res):
+    """GMSK (h = 0.5): frequency discriminator, Gaussian-matched smoothing,
+    mid-symbol sign decisions. The discriminator sign IS the bit for MSK-
+    family signals, so no carrier loop is needed - only the frequency
+    offset must be removed (it appears as a DC shift of the discriminator).
+    """
+    inst = np.diff(np.unwrap(np.angle(x))) / (2 * np.pi)
+    inst = inst - np.median(inst)          # CFO shows up as DC here
+
+    def sample_at(n_i):
+        w = max(2, n_i // 2)
+        sm = np.convolve(inst, np.ones(w) / w, mode="same")
+        best_p, best_score = 0, -1.0
+        for p2 in range(n_i):
+            sc = float(np.abs(sm[p2::n_i]).mean())
+            if sc > best_score:
+                best_score, best_p = sc, p2
+        # normalised margin: mean |freq| at decisions over the h=0.5 peak
+        return sm[best_p::n_i], best_score / (0.25 / n_i)
+
+    n_int = int(round(sps))
+    if not (2 <= n_int <= 64):
+        n_int = 8
+    samp, margin0 = sample_at(n_int)
+    # an implausible upstream symbol-rate estimate shows up as a weak
+    # discriminator margin: re-derive the period from the sign run
+    # lengths of the discriminator (median run of random NRZ data is one
+    # symbol; sub-3-sample glitch runs are noise and discarded)
+    if margin0 < 0.6:
+        wsm = np.convolve(inst, np.ones(4) / 4, mode="same")
+        sgn = np.sign(wsm)
+        changes = np.flatnonzero(np.diff(sgn) != 0) + 1
+        runs = np.diff(np.concatenate([[0], changes, [len(sgn)]]))
+        runs = runs[runs >= 3]
+        n_run = int(np.median(runs)) if len(runs) else n_int
+        cands = sorted(set(c for c in
+                           [n_run - 1, n_run, n_run + 1, n_int]
+                           if 2 <= c <= 64))
+        best = (margin0, n_int, samp)
+        for cand in cands:
+            s_c, m_c = sample_at(cand)
+            # normalise comparison by candidate period so larger periods
+            # do not win automatically
+            if m_c > best[0]:
+                best = (m_c, cand, s_c)
+        margin0, n_int, samp = best
+    dev = 0.25 / n_int                     # theoretical peak deviation
+    res.samples_per_symbol = float(n_int)
+    res.hard_bits = (samp > 0).astype(np.uint8)
+    res.llrs = (-samp / (dev + 1e-12) * 4).astype(np.float32)
+    res.symbols = (samp / (dev + 1e-12)).astype(np.complex64)
+    margin = float(np.abs(samp).mean() / (dev + 1e-12))
+    res.timing_locked = res.carrier_locked = bool(margin > 0.5)
+    res.lock_metrics["discriminator_margin"] = round(margin, 3)
+    res.demodulation_status = ("GOOD" if margin > 0.7 else
+                               "DEGRADED" if margin > 0.4 else "FAILED")
+    if res.demodulation_status == "FAILED":
+        res.warnings.append("GMSK discriminator margin too low: bit stream "
+                            "withheld")
+    return res
+
+
+def _demod_analog(x, modulation, res):
+    """Analog demodulators: audio out, no bit stream. The bit layer is
+    skipped for these signals by design."""
+    n = len(x)
+    audio = None
+    extra = {}
+    if modulation == "FM":
+        inst = np.diff(np.unwrap(np.angle(x))) / (2 * np.pi)
+        audio = inst - np.median(inst)
+        extra["peak_deviation_norm"] = round(float(np.percentile(
+            np.abs(audio), 99)), 5)
+    elif modulation in ("AM-DSB-WC", "AM-DSB-SC"):
+        env = np.abs(x)
+        if modulation == "AM-DSB-WC":
+            audio = env - env.mean()
+            carrier = float(env.mean() / (env.std() + 1e-12))
+            extra["carrier_to_modulation"] = round(carrier, 2)
+        else:
+            # suppressed carrier: recover the carrier from the squared
+            # spectrum line, then take the coherent (real) component
+            cfo = _coarse_cfo(x, 2, limiter=False)
+            y = x * np.exp(-2j * np.pi * cfo * np.arange(n))
+            rot = np.angle((y[:65536] ** 2).mean()) / 2
+            audio = (y * np.exp(-1j * rot)).real
+            extra["recovered_carrier_norm"] = round(float(cfo), 6)
+    else:                                   # SSB
+        # centre the occupied band; absolute audio pitch is ambiguous for
+        # suppressed-carrier SSB and reported as such
+        X = np.abs(np.fft.fft(x[:min(n, 1 << 17)]))
+        k = int(np.argmax(X))
+        f0 = np.fft.fftfreq(len(X))[k]
+        y = x * np.exp(-2j * np.pi * f0 * np.arange(n))
+        audio = y.real
+        extra["shifted_by_norm"] = round(float(f0), 6)
+        if modulation.endswith("SC"):
+            res.warnings.append("suppressed-carrier SSB: absolute audio "
+                                "pitch is ambiguous without the carrier")
+    audio = audio / (np.abs(audio).max() + 1e-12)
+    # audio quality: tonal concentration of the demodulated spectrum
+    A = np.abs(np.fft.rfft(audio[:min(len(audio), 1 << 16)]))
+    conc = float(np.sort(A)[-8:].sum() / (A.sum() + 1e-12))
+    res.lock_metrics.update({"audio_tonal_concentration": round(conc, 3),
+                             **extra})
+    res.audio = audio.astype(np.float32)
+    res.demodulation_status = ("GOOD" if conc > 0.15 else
+                               "DEGRADED" if conc > 0.05 else "FAILED")
+    res.timing_locked = res.carrier_locked = res.demodulation_status == "GOOD"
+    res.warnings.append("analog transmission: audio demodulated, no bit "
+                        "layer applies")
     return res
 
 

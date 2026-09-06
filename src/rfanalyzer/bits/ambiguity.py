@@ -23,8 +23,19 @@ def enumerate_ambiguities(symbols: np.ndarray, modulation: str,
     (x differential decode)."""
     if modulation not in CONSTELLATIONS or symbols is None or len(symbols) == 0:
         return []
-    order = {"BPSK": 2, "QPSK": 4, "8PSK": 8}.get(modulation, 4)
-    n_rot = order if modulation in ("BPSK", "QPSK", "8PSK") else 4
+    table, _k = CONSTELLATIONS[modulation]
+    order = len(table)
+    # a blind carrier loop can lock at any rotational symmetry of the
+    # constellation: every PSK phase for M-PSK, quadrant symmetry for
+    # QAM/APSK/ASK-family maps
+    if modulation.endswith("PSK") and not modulation.endswith("APSK"):
+        n_rot = order
+    else:
+        n_rot = 4
+    # keep the fan-out bounded: differential variants are dropped first
+    # for high-order PSK where rotations alone exhaust the budget
+    if n_rot * 2 * 2 > max_streams:
+        include_differential = False
     streams = []
     noise_var = max(1e-4, float(np.var(np.abs(symbols)) * 0.5))
     for conj in (False, True):

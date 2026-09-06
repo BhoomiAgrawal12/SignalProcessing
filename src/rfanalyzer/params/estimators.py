@@ -108,9 +108,15 @@ def symbol_rate(x: np.ndarray, min_rate: float = 1e-4,
     f_pos, a_pos = freqs[pos], acc[pos]
     if len(a_pos) == 0:
         return {"candidates": [], "confidence": 0.0}
-    # peak prominence against a smoothed background
+    # peak prominence against a smoothed background; the median filter is
+    # one-sided at the mask edge, which inflates prominence there and used
+    # to elect a spurious "rate" exactly at 0.25*OBW - so the edge bins
+    # are excluded from candidacy
     bg = sig.medfilt(a_pos, kernel_size=51)
     prom = a_pos / (bg + 1e-12)
+    edge = min(26, len(prom) // 4)
+    prom[:edge] = 0.0
+    prom[-3:] = 0.0
     order = np.argsort(prom)[::-1]
     cands = []
     for k in order[:20]:

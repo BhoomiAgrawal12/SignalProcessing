@@ -43,13 +43,102 @@ def _qam(order: int) -> tuple:
     return table, k
 
 
+def _ask(order: int) -> tuple:
+    """Bipolar amplitude-shift keying (PAM levels on the real axis).
+    OOK is the order-2 special case; after S1 conditioning removes the DC
+    term an on/off signal lands on symmetric bipolar levels anyway."""
+    k = int(np.log2(order))
+    gray = np.arange(order) ^ (np.arange(order) >> 1)
+    pos_of = np.argsort(gray)
+    levels = 2 * np.arange(order) - (order - 1)
+    table = np.zeros(order, dtype=np.complex128)
+    for lab in range(order):
+        table[lab] = levels[pos_of[lab]]
+    table /= np.sqrt((np.abs(table) ** 2).mean())
+    return table, k
+
+
+def _cross_qam(order: int) -> tuple:
+    """Cross constellations for 32/128 QAM: square grid with the four
+    corner blocks removed (standard cross shape)."""
+    k = int(np.log2(order))
+    side = {32: 6, 128: 12}[order]
+    cut = {32: 1, 128: 2}[order]
+    pts = []
+    for i in range(side):
+        for q in range(side):
+            if (i < cut or i >= side - cut) and (q < cut or q >= side - cut):
+                continue
+            pts.append(complex(2 * i - (side - 1), 2 * q - (side - 1)))
+    pts = np.array(pts[:order])
+    pts /= np.sqrt((np.abs(pts) ** 2).mean())
+    # nearest-neighbour ordered labelling (consistent, shared with the
+    # modulator; blind analysis never depends on a standard mapping)
+    order_idx = np.lexsort((pts.imag, pts.real))
+    table = pts[order_idx]
+    return table, k
+
+
+def _apsk(order: int) -> tuple:
+    """Ring constellations in the DVB-S2(X) style: (points per ring,
+    relative radius, phase offset). Labels are assigned ring-major, which
+    the factory shares, so encode/decode round-trips exactly."""
+    rings = {
+        16: [(4, 1.0, np.pi / 4), (12, 2.57, 0.0)],
+        32: [(4, 1.0, np.pi / 4), (12, 2.53, 0.0), (16, 4.30, np.pi / 16)],
+        64: [(8, 1.0, np.pi / 8), (16, 2.2, 0.0), (20, 3.6, np.pi / 20),
+             (20, 5.2, 0.0)],
+        128: [(8, 1.0, np.pi / 8), (16, 2.0, 0.0), (24, 3.2, np.pi / 24),
+              (32, 4.6, 0.0), (48, 6.2, np.pi / 48)],
+    }[order]
+    pts = []
+    for n_pts, radius, phase in rings:
+        ang = 2 * np.pi * np.arange(n_pts) / n_pts + phase
+        pts.extend(radius * np.exp(1j * ang))
+    pts = np.array(pts[:order])
+    pts /= np.sqrt((np.abs(pts) ** 2).mean())
+    return pts, int(np.log2(order))
+
+
 CONSTELLATIONS = {
     "BPSK": _psk(2),
     "QPSK": _psk(4),
+    "OQPSK": _psk(4),          # offset applied in the waveform, not the map
     "8PSK": _psk(8),
+    "16PSK": _psk(16),
+    "32PSK": _psk(32),
+    "OOK": _ask(2),
+    "4ASK": _ask(4),
+    "8ASK": _ask(8),
     "16QAM": _qam(16),
+    "32QAM": _cross_qam(32),
     "64QAM": _qam(64),
+    "128QAM": _cross_qam(128),
+    "256QAM": _qam(256),
+    "16APSK": _apsk(16),
+    "32APSK": _apsk(32),
+    "64APSK": _apsk(64),
+    "128APSK": _apsk(128),
 }
+
+# family lookup used by the receiver dispatch and the quality gate
+MOD_FAMILY = {}
+for _name in CONSTELLATIONS:
+    if _name == "OQPSK":
+        MOD_FAMILY[_name] = "oqpsk"
+    elif _name.endswith("APSK"):
+        MOD_FAMILY[_name] = "apsk"
+    elif _name.endswith("PSK"):
+        MOD_FAMILY[_name] = "psk"
+    elif _name.endswith("QAM"):
+        MOD_FAMILY[_name] = "qam"
+    else:
+        MOD_FAMILY[_name] = "ask"
+for _name in ("2FSK", "4FSK", "8FSK"):
+    MOD_FAMILY[_name] = "fsk"
+MOD_FAMILY["GMSK"] = "gmsk"
+for _name in ("FM", "AM-DSB-WC", "AM-DSB-SC", "AM-SSB-WC", "AM-SSB-SC"):
+    MOD_FAMILY[_name] = "analog"
 
 
 def bits_to_iq_symbols(bits: np.ndarray, modulation: str) -> np.ndarray:

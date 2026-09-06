@@ -13,6 +13,7 @@ from typing import Optional
 
 import numpy as np
 from scipy import signal as sig
+from scipy.signal import hilbert as _hilbert
 
 from ..demod.constellations import CONSTELLATIONS, bits_to_iq_symbols
 from ..demod.filters import rrc_taps
@@ -150,13 +151,34 @@ class WaveformFactory:
             gt.scrambler.update(w)
 
         # modulate
-        if modulation in CONSTELLATIONS:
+        if modulation == "OQPSK":
+            symbols = bits_to_iq_symbols(bits, "OQPSK")
+            n_int = int(round(sps))
+            i_wave = self._pulse_shape(symbols.real.astype(np.complex128),
+                                       sps, rolloff).real
+            q_wave = self._pulse_shape(1j * symbols.imag.astype(np.complex128),
+                                       sps, rolloff).imag
+            # offset the quadrature rail by half a symbol
+            q_shift = np.zeros_like(q_wave)
+            half = n_int // 2
+            q_shift[half:] = q_wave[:-half] if half else q_wave
+            iq = i_wave + 1j * q_shift
+        elif modulation in CONSTELLATIONS:
             symbols = bits_to_iq_symbols(bits, modulation)
             iq = self._pulse_shape(symbols, sps, rolloff)
-        elif modulation.endswith("FSK"):
+        elif modulation.endswith("FSK") and modulation != "GMSK":
             order = int(modulation[0])
             iq, dev = self._fsk(bits, order, sps)
             gt.fsk_deviation_norm = dev
+        elif modulation == "GMSK":
+            iq = self._gmsk(bits, sps)
+            gt.fsk_deviation_norm = 0.25 / sps * 2
+        elif modulation in ("FM", "AM-DSB-WC", "AM-DSB-SC",
+                            "AM-SSB-WC", "AM-SSB-SC"):
+            iq = self._analog(modulation, sps, n_frames)
+            gt.frame = {"note": "analog transmission: no digital framing"}
+            gt.payloads = []
+            gt.info_bits = None
         else:
             raise ValueError(f"unsupported modulation {modulation}")
 
@@ -199,6 +221,46 @@ class WaveformFactory:
             fr = Fraction(sps / n_int).limit_denominator(200)
             x = sig.resample_poly(x, fr.numerator, fr.denominator)
         return x
+
+    def _gmsk(self, bits: np.ndarray, sps: float, bt: float = 0.3) -> np.ndarray:
+        """Gaussian-filtered MSK (h = 0.5): NRZ bits -> Gaussian pulse
+        shaping of the frequency pulse -> phase integration."""
+        n_int = int(round(sps))
+        nrz = np.repeat(bits.astype(np.float64) * 2 - 1, n_int)
+        # Gaussian filter with the given bandwidth-time product
+        t = np.arange(-2 * n_int, 2 * n_int + 1) / n_int
+        sigma = np.sqrt(np.log(2)) / (2 * np.pi * bt)
+        g = np.exp(-t * t / (2 * sigma * sigma))
+        g /= g.sum()
+        freq = np.convolve(nrz, g, mode="same")
+        # h = 0.5: total phase change per symbol = +-pi/2
+        phase = np.cumsum(freq) * (np.pi / 2) / n_int
+        return np.exp(1j * phase)
+
+    def _analog(self, modulation: str, sps: float, n_frames: int) -> np.ndarray:
+        """Analog transmissions from a deterministic multi-tone message
+        (two audio tones plus a weak third), long enough to match the
+        digital burst lengths."""
+        n = int(n_frames * 96 * sps / 2)
+        t = np.arange(n)
+        fm_audio = (np.sin(2 * np.pi * 0.004 * t) +
+                    0.5 * np.sin(2 * np.pi * 0.0093 * t) +
+                    0.25 * np.sin(2 * np.pi * 0.0151 * t))
+        m = fm_audio / np.abs(fm_audio).max()
+        if modulation == "FM":
+            dev = 0.03            # peak deviation, cycles/sample
+            phase = 2 * np.pi * dev * np.cumsum(m)
+            return np.exp(1j * phase)
+        if modulation == "AM-DSB-WC":
+            return (1.0 + 0.6 * m).astype(np.complex128)
+        if modulation == "AM-DSB-SC":
+            return (m + 0j)
+        # SSB: analytic signal of the message (upper sideband); WC adds
+        # a carrier tone
+        analytic = m + 1j * np.imag(_hilbert(m))
+        if modulation == "AM-SSB-WC":
+            return 0.35 + analytic
+        return analytic
 
     def _fsk(self, bits: np.ndarray, order: int, sps: float) -> tuple:
         k = int(np.log2(order))
