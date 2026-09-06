@@ -65,6 +65,38 @@ limitations.
   matrix (6 seeds x 7 modulations, SNR 15-30 dB).
 
 ## S6 demodulation (`demod/receiver.py`)
+
+Family dispatch: psk / oqpsk / qam / apsk / ask (linear chain), fsk /
+gmsk (discriminator chain), analog (audio detectors). Every path ends in
+the quality gate that sets `demodulation_status` from per-modulation EVM
+gates, lock flags and the rotational-concentration metric; FAILED
+demodulations never feed the bit layer.
+
+Key design facts (each was verified against ground truth the hard way):
+- Nearest-point EVM cannot detect a spinning dense-PSK constellation, so
+  carrier lock is additionally evidenced by rotational concentration
+  (|E[u^M]| for PSK, ring-gated for APSK, an off-grid-rotation geometric
+  baseline for QAM).
+- CFO is estimated in the symbol domain after timing (ISI-free samples);
+  candidate spectral lines are arbitrated by nearest-constellation
+  distance because frame-periodic data creates lines that masquerade as
+  CFO. Sample-domain M-power pre-correction is only applied for PSK
+  orders <= 8 and ASK.
+- Dense PSK/APSK use slip-free block Viterbi&Viterbi feedforward carrier
+  recovery; dense QAM (128/256) uses no tracking loop at all - a fine
+  constant-phase grid search plus a very slow feedforward polish, because
+  both DD-PLLs and per-block VV add decision noise there.
+- APSK coset ambiguity: the VV ring anchor fixes phase modulo the
+  dominant ring's own symmetry; the residual rotation is snapped against
+  the full table on the non-dominant rings, and the enumeration uses the
+  constellation's TRUE symmetry group computed from the table.
+- OQPSK recovers the carrier first (x^4 line at 4fc), takes the symbol
+  rate from the x^2 line pair symmetric about 2fc, and tries both stagger
+  directions. GMSK takes rate and carrier from the classic x^2 squaring
+  lines at 2fc +- Rs/2.
+- Timing is feedforward Oerder&Meyr with cubic Lagrange interpolation.
+
+### Legacy notes
 - Timing: Oerder&Meyr feedforward estimator - the phase of the symbol-rate
   spectral tone of |x|^2 per block, unwrapped across blocks, then a
   weighted linear fit gives timing offset + clock drift; symbols are
