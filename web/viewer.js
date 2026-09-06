@@ -224,14 +224,22 @@ function renderSpectrumTab(d) {
 
 function renderDemodTab(d) {
   const dm = d.demodulation || {};
+  const ds = dm.demodulation_status;
+  if (ds) {
+    const el0 = document.getElementById("mod_head");
+    // status chip is prepended in renderDemodTab below via mod_head
+  }
   UI.kvTable("demod_tbl",
     [...Object.entries(dm).filter(([k]) => k !== "lock_metrics"),
      ...Object.entries(dm.lock_metrics || {}).map(([k, v]) => ["lock." + k, v])]
       .map(([k, v]) => [k, UI.esc(JSON.stringify(v))]));
   const m = d.modulation || {};
+  const ds2 = (d.demodulation || {}).demodulation_status;
   $("mod_head").innerHTML =
     `<span style="font:600 1.3rem var(--mono)">${UI.esc(m.prediction || "-")}</span> ` +
     UI.meter(m.confidence || 0) +
+    (ds2 ? " " + UI.badge(`DEMOD ${ds2}`, ds2 === "GOOD" ? "good" :
+        ds2 === "DEGRADED" ? "warn" : "bad") : "") +
     (m.classifier_agreement === false ? " " + UI.badge("ENGINES DISAGREE", "warn") : "");
   const rows = (m.alternatives || []).map((a) => ["fusion candidate", a[0], a[1]]);
   for (const [eng, pred] of Object.entries(m.engine_predictions || {}))

@@ -396,6 +396,13 @@ function renderPayloadIntel(container, pi, payloadHexStr) {
          `${bf.unique_bytes ?? "-"} unique byte values`);
   const p0 = el("div", "panel");
   p0.appendChild(el("h3", null, "S11 &mdash; payload intelligence summary"));
+  const trust = (pi.summary || {}).trust || (pi.provenance || {}).trust;
+  if (trust) {
+    const kind = trust.startsWith("VALIDATED") ? "good" :
+      trust.startsWith("PROBABLE") ? "info" : "warn";
+    p0.appendChild(el("div", null,
+      `<div style="margin-bottom:12px">${badge(trust, kind)}</div>`));
+  }
   p0.appendChild(tiles);
   const prov = pi.provenance || {};
   p0.appendChild(el("div", null,
@@ -404,7 +411,11 @@ function renderPayloadIntel(container, pi, payloadHexStr) {
           prov.crc_validated ? "good" : "warn") + " " +
     (prov.fec_syndrome_rate != null ?
       badge(`FEC syndrome-zero ${prov.fec_syndrome_rate}`, "info") : "") + " " +
-    (prov.demod_locked != null ?
+    (prov.demod_status ?
+      badge(`DEMOD ${prov.demod_status}`,
+            prov.demod_status === "GOOD" ? "good" :
+            prov.demod_status === "DEGRADED" ? "warn" : "bad") :
+     prov.demod_locked != null ?
       badge(prov.demod_locked ? "DEMOD LOCKED" : "WEAK DEMOD LOCK",
             prov.demod_locked ? "good" : "warn") : "")));
   c.appendChild(p0);

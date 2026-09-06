@@ -143,6 +143,37 @@ Measured on an Apple M5 (10 cores), all report targets are met:
 | end-to-end, one clean signal (full stack) |   9.2 s  | < 90 s   |
 | 1 GB IQ file to first waterfall (memmap)  |   0.09 s | < 3 s    |
 
+## Supported modulations (S6 demodulation)
+
+Every family runs through a dispatched receiver with family-specific
+synchronisation and a mandatory quality gate
+(`demodulation_status = GOOD | DEGRADED | FAILED`); a FAILED demodulation
+stops the pipeline instead of feeding the bit layer unreliable bits.
+
+| family | modulations | carrier strategy |
+|--------|-------------|------------------|
+| PSK    | BPSK, QPSK, 8PSK, 16PSK, 32PSK | DD-PLL (<=8), slip-free V&V feedforward (>=16) |
+| OQPSK  | OQPSK | x^4 carrier first, x^2 line-pair rate, dual stagger trial |
+| ASK    | OOK, 4ASK, 8ASK | 2nd-moment axis alignment + slow PLL |
+| QAM    | 16/32/64/128/256-QAM | symbol-domain CFO + phase grid + slow polish (no loops on dense QAM) |
+| APSK   | 16/32/64/128-APSK | ring-gated V&V + symmetry-aware coset snap |
+| CPM    | 2FSK, 4FSK, GMSK | discriminator; GMSK rate/carrier from x^2 squaring lines |
+| OFDM   | detected + parameterised (N_FFT, CP), multi-evidence, not demodulated |
+| analog | AM-DSB-WC/SC, AM-SSB-WC/SC, FM | envelope / coherent / discriminator + audio LPF; audio out, no bit layer |
+
+`scripts/validate_matrix.py` measures every modulation against ground
+truth (blind classification, known-modulation BER, full blind chain with
+frames/CRC/payload trust) and writes `docs/validation_report.json` with a
+PASS/DEGRADED/FAIL verdict per case.
+
+## Evidence gates and trust
+
+The pipeline is evidence-driven: S6 gates on EVM/locks/rotational
+concentration; S10 accepts a frame only with a CRC pass or a sync word
+plus cross-frame stability (rejections are reported with their evidence);
+S11 grades its input VALIDATED / PROBABLE / SPECULATIVE from the CRC, FEC
+and demodulation provenance and caps every finding accordingly.
+
 ## S11 payload intelligence
 
 After payload recovery, S11 answers "what do those bytes mean" with
