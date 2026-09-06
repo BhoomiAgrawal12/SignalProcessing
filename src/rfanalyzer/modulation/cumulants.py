@@ -44,6 +44,12 @@ def classify_cumulants(symbols: np.ndarray, snr_db: float = None) -> dict:
     d2 = {}
     for name, ref in _REFERENCE.items():
         d2[name] = float((((f - ref) * _WEIGHTS) ** 2).sum())
+    # absolute-fit guard: softmax only sees RELATIVE distances, so a
+    # Gaussian cloud (OFDM, noise) would otherwise claim its least-bad
+    # reference with false certainty; a poor best fit deflates all
+    # probabilities and the mass moves to an explicit no-fit bucket
+    d_best = min(d2.values())
+    fit_penalty = float(np.exp(-max(0.0, d_best - 2.0) / 1.0))
     # temperature scaled by noise level: at low SNR features blur, so
     # soften the decision rather than overclaim
     temp = 0.05
@@ -53,9 +59,11 @@ def classify_cumulants(symbols: np.ndarray, snr_db: float = None) -> dict:
     mx = max(logits.values())
     exps = {k: np.exp(v - mx) for k, v in logits.items()}
     z = sum(exps.values())
-    probs = {k: float(v / z) for k, v in
+    probs = {k: float(v / z * fit_penalty) for k, v in
              sorted(exps.items(), key=lambda kv: -kv[1])}
     return {"probabilities": probs,
+            "fit_distance": round(d_best, 3),
+            "no_constellation_mass": round(1.0 - fit_penalty, 3),
             "features": [round(float(x), 4) for x in f],
             "feature_names": ["|C20|", "|C40|", "|C42|", "m63"],
             "reference": {k: [round(float(x), 3) for x in v]

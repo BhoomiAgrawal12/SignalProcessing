@@ -94,7 +94,12 @@ def classify_modulation(x: np.ndarray, params, config) -> ModulationHypothesis:
     # (slow FSK tone dwell and single-carrier pulse autocorrelation both
     # mimic a cyclic prefix, so CP correlation alone is not sufficient)
     cum_top = max(cum["probabilities"].values()) if cum else 0.0
-    if params.ofdm_detected and env_cv > 0.35 and cum_top < 0.6 and \
+    # a strong single-carrier symbol-rate line is decisive AGAINST OFDM
+    # (frame periodicity in single-carrier data can mimic cyclic-prefix
+    # recurrence, but OFDM has no |x|^2 symbol-rate tone)
+    sr_conf = params.confidences.get("symbol_rate", {}).get("value", 0)
+    if params.ofdm_detected and env_cv > 0.35 and cum_top < 0.75 and \
+            sr_conf < 0.5 and \
             (params.confidences.get("ofdm", {}).get("value", 0) > 0.6):
         return ModulationHypothesis(
             prediction="OFDM", confidence=params.confidences["ofdm"]["value"],

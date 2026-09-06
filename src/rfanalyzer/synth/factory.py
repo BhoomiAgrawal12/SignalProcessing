@@ -173,6 +173,10 @@ class WaveformFactory:
         elif modulation == "GMSK":
             iq = self._gmsk(bits, sps)
             gt.fsk_deviation_norm = 0.25 / sps * 2
+        elif modulation == "OFDM":
+            iq = self._ofdm(bits, n_fft=64, cp=16)
+            gt.fec = dict(fec)
+            gt.frame["note"] = "OFDM: QPSK subcarriers, N_FFT 64, CP 16"
         elif modulation in ("FM", "AM-DSB-WC", "AM-DSB-SC",
                             "AM-SSB-WC", "AM-SSB-SC"):
             iq = self._analog(modulation, sps, n_frames)
@@ -236,6 +240,25 @@ class WaveformFactory:
         # h = 0.5: total phase change per symbol = +-pi/2
         phase = np.cumsum(freq) * (np.pi / 2) / n_int
         return np.exp(1j * phase)
+
+    def _ofdm(self, bits: np.ndarray, n_fft: int = 64,
+              cp: int = 16, n_used: int = 48) -> np.ndarray:
+        """QPSK subcarriers, IFFT, cyclic prefix. Occupies roughly
+        n_used/n_fft of the band; a couple of times oversampled by
+        construction (guard carriers)."""
+        from ..demod.constellations import bits_to_iq_symbols
+        syms = bits_to_iq_symbols(bits, "QPSK")
+        n_sym_ofdm = max(1, len(syms) // n_used)
+        out = []
+        for i in range(n_sym_ofdm):
+            grid = np.zeros(n_fft, dtype=complex)
+            block = syms[i * n_used:(i + 1) * n_used]
+            idx = np.concatenate([np.arange(1, n_used // 2 + 1),
+                                  np.arange(n_fft - n_used // 2, n_fft)])
+            grid[idx[:len(block)]] = block
+            t = np.fft.ifft(grid) * np.sqrt(n_fft)
+            out.append(np.concatenate([t[-cp:], t]))
+        return np.concatenate(out)
 
     def _analog(self, modulation: str, sps: float, n_frames: int) -> np.ndarray:
         """Analog transmissions from a deterministic multi-tone message

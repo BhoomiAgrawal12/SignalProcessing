@@ -236,19 +236,22 @@ def fsk_symbol_rate(x: np.ndarray, min_rate: float = 1e-4) -> dict:
     return {"rate_norm": float(f_pos[best_k]), "confidence": conf}
 
 
-def ofdm_detect(x: np.ndarray, fft_sizes=(128, 256, 512, 1024, 2048)) -> dict:
-    """Cyclic-prefix autocorrelation OFDM detector.
+def ofdm_detect(x: np.ndarray, fft_sizes=(64, 128, 256, 512, 1024, 2048)) -> dict:
+    """Multi-evidence OFDM detector.
 
-    An OFDM symbol's CP makes x correlate with itself at lag = FFT size in
-    *periodic bursts* (one per symbol).  A single-carrier signal oversampled
-    N times also self-correlates at short lags, so we require both a strong
-    correlation AND a peaky (bursty) profile, and we skip lags inside the
-    pulse-autocorrelation region.
+    Cyclic-prefix correlation alone false-positives on oversampled
+    single-carrier signals and slow FSK, so a detection requires ALL of:
+    1. strong CP correlation (99th percentile of the lag-N product),
+    2. a peaky (bursty) correlation profile,
+    3. the peaks recurring at the OFDM symbol period nfft+cp
+       (autocorrelation of the correlation profile),
+    4. the same detection in both halves of the recording.
+    Anything less is reported as insufficient evidence.
     """
     n = min(len(x), 1 << 18)
     xx = x[:n]
     p = float((np.abs(xx) ** 2).mean())
-    best = {"detected": False, "corr": 0.0}
+    best = {"detected": False, "corr": 0.0, "evidence": {}}
     for nfft in fft_sizes:
         if n < 6 * nfft:
             continue
@@ -262,10 +265,44 @@ def ofdm_detect(x: np.ndarray, fft_sizes=(128, 256, 512, 1024, 2048)) -> dict:
             p99 = float(np.percentile(m, 99))
             peaky = (p99 - med) / (med + 1e-9)
             corr = p99
-            if corr > 0.5 and peaky > 2.5 and corr > best["corr"]:
-                best = {"detected": True, "fft_size": nfft,
-                        "cp_length": cp, "corr": corr,
-                        "peakiness": round(peaky, 2)}
+            # peakiness is reported but is NOT a discriminator: continuous
+            # OFDM keeps the lag product elevated everywhere (low peaky),
+            # while oversampled single carriers can be very peaky - the
+            # symbol-period recurrence below separates them
+            if corr < 0.45:
+                continue
+            # evidence 3: peak recurrence at the OFDM symbol period
+            mz = m - m.mean()
+            period = nfft + cp
+            if len(mz) < 3 * period:
+                continue
+            num = float(np.mean(mz[:-period] * mz[period:]))
+            # compare against an off-period lag as the null
+            off_lag = period + period // 3
+            den = float(np.mean(mz[:-off_lag] * mz[off_lag:]))
+            var = float(np.mean(mz * mz)) + 1e-15
+            period_score = (num - den) / var
+            # evidence 4: both halves agree
+            half = len(m) // 2
+            c1 = float(np.percentile(m[:half], 99))
+            c2 = float(np.percentile(m[half:], 99))
+            halves = min(c1, c2) > 0.35
+            detected = period_score > 0.3 and halves
+            if corr > best["corr"] and detected:
+                best = {"detected": True, "fft_size": nfft, "cp_length": cp,
+                        "corr": corr,
+                        "evidence": {"cp_correlation": round(corr, 3),
+                                     "peakiness": round(peaky, 2),
+                                     "period_score": round(period_score, 3),
+                                     "halves_consistent": bool(halves)}}
+            elif corr > best.get("corr", 0) and not best["detected"]:
+                best = {"detected": False, "fft_size": nfft, "cp_length": cp,
+                        "corr": corr,
+                        "evidence": {"cp_correlation": round(corr, 3),
+                                     "peakiness": round(peaky, 2),
+                                     "period_score": round(period_score, 3),
+                                     "halves_consistent": bool(halves),
+                                     "verdict": "insufficient evidence"}}
     return best
 
 

@@ -67,7 +67,36 @@ def detect_signals(x: np.ndarray, config, sample_rate=None) -> tuple:
             sample_rate=sample_rate, id=len(segments)))
         if len(segments) >= config.max_signals:
             break
-    segments.sort(key=lambda s: -s.snr_db)
+    # multicarrier comb merging: many narrow, regularly spaced segments
+    # are the subcarriers of ONE multicarrier (OFDM-like) emission, and
+    # the comb itself is subcarrier-structure evidence. The merged wide
+    # segment is prepended so downstream stages analyse the whole signal.
+    if len(segments) >= 6:
+        by_f = sorted(segments, key=lambda s: s.f_low_norm)
+        bws = np.array([s.bandwidth_norm for s in by_f])
+        med_bw = float(np.median(bws))
+        chains, chain = [], [by_f[0]]
+        for prev, cur in zip(by_f, by_f[1:]):
+            gap = cur.f_low_norm - prev.f_high_norm
+            if gap < 6 * med_bw and cur.bandwidth_norm < 4 * med_bw:
+                chain.append(cur)
+            else:
+                chains.append(chain)
+                chain = [cur]
+        chains.append(chain)
+        best_chain = max(chains, key=len)
+        if len(best_chain) >= 6:
+            f_lo = min(s.f_low_norm for s in best_chain)
+            f_hi = max(s.f_high_norm for s in best_chain)
+            merged = SignalSegment(
+                start_sample=min(s.start_sample for s in best_chain),
+                end_sample=max(s.end_sample for s in best_chain),
+                f_low_norm=f_lo, f_high_norm=f_hi,
+                snr_db=float(np.median([s.snr_db for s in best_chain])),
+                confidence=0.8, sample_rate=sample_rate)
+            segments = [merged] + [s for s in segments
+                                   if s not in best_chain]
+    segments.sort(key=lambda s: -s.snr_db * (1 + s.bandwidth_norm))
     for k, s in enumerate(segments):
         s.id = k
     return segments, {"waterfall": wf, "noise_floor_db": floor,
