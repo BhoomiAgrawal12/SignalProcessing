@@ -1,11 +1,25 @@
 {
   "summary": {
-    "total": 27,
-    "pass": 20,
-    "degraded": 6,
-    "fail": 1
+    "total": 49,
+    "pass": 30,
+    "degraded": 17,
+    "fail": 2
   },
   "cases": [
+    {
+      "modulation": "BPSK",
+      "snr_db": 8,
+      "seed": 7,
+      "classified": "BPSK",
+      "class_top1": true,
+      "class_top2": true,
+      "demod_status": "GOOD",
+      "evm_percent": 14.3,
+      "ber": 0.0,
+      "cfo_error": 6.1257102272728806e-06,
+      "verdict": "PASS",
+      "elapsed_s": 0.2
+    },
     {
       "modulation": "BPSK",
       "snr_db": 15,
@@ -17,8 +31,25 @@
       "evm_percent": 6.5,
       "ber": 0.0,
       "cfo_error": 6.125710227272447e-06,
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
       "verdict": "PASS",
-      "elapsed_s": 0.2
+      "elapsed_s": 11.5
+    },
+    {
+      "modulation": "QPSK",
+      "snr_db": 12,
+      "seed": 7,
+      "classified": "QPSK",
+      "class_top1": true,
+      "class_top2": true,
+      "demod_status": "GOOD",
+      "evm_percent": 9.8,
+      "ber": 0.0,
+      "cfo_error": 7.004257726029445e-06,
+      "verdict": "PASS",
+      "elapsed_s": 0.1
     },
     {
       "modulation": "QPSK",
@@ -31,7 +62,25 @@
       "evm_percent": 5.8,
       "ber": 0.0,
       "cfo_error": 7.0141571887477605e-06,
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
       "verdict": "PASS",
+      "elapsed_s": 73.9
+    },
+    {
+      "modulation": "OQPSK",
+      "snr_db": 15,
+      "seed": 7,
+      "classified": "16QAM",
+      "class_top1": false,
+      "class_top2": false,
+      "demod_status": "GOOD",
+      "evm_percent": 12.4,
+      "ber": 0.0,
+      "cfo_error": 3.9062500000000035e-06,
+      "verdict": "DEGRADED",
+      "reason": "classification missed",
       "elapsed_s": 0.1
     },
     {
@@ -45,6 +94,24 @@
       "evm_percent": 11.0,
       "ber": 0.0,
       "cfo_error": 3.910488736490279e-06,
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
+      "verdict": "DEGRADED",
+      "reason": "classification missed",
+      "elapsed_s": 73.8
+    },
+    {
+      "modulation": "8PSK",
+      "snr_db": 18,
+      "seed": 7,
+      "classified": "32PSK",
+      "class_top1": false,
+      "class_top2": false,
+      "demod_status": "GOOD",
+      "evm_percent": 7.1,
+      "ber": 0.0,
+      "cfo_error": 4.020713274075632e-06,
       "verdict": "DEGRADED",
       "reason": "classification missed",
       "elapsed_s": 0.1
@@ -60,7 +127,25 @@
       "evm_percent": 6.0,
       "ber": 0.0,
       "cfo_error": 1.908879449837725e-06,
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
       "verdict": "PASS",
+      "elapsed_s": 16.6
+    },
+    {
+      "modulation": "16PSK",
+      "snr_db": 25,
+      "seed": 7,
+      "classified": "32PSK",
+      "class_top1": false,
+      "class_top2": false,
+      "demod_status": "GOOD",
+      "evm_percent": 6.8,
+      "ber": 0.0,
+      "cfo_error": 0.0010703125,
+      "verdict": "DEGRADED",
+      "reason": "classification missed",
       "elapsed_s": 0.1
     },
     {
@@ -74,8 +159,25 @@
       "evm_percent": 6.6,
       "ber": 0.0,
       "cfo_error": 0.0008828124999999999,
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
       "verdict": "DEGRADED",
       "reason": "classification missed",
+      "elapsed_s": 18.8
+    },
+    {
+      "modulation": "32PSK",
+      "snr_db": 30,
+      "seed": 7,
+      "classified": "32PSK",
+      "class_top1": true,
+      "class_top2": true,
+      "demod_status": "GOOD",
+      "evm_percent": 7.1,
+      "ber": 0.0,
+      "cfo_error": 0.0008828124999999999,
+      "verdict": "PASS",
       "elapsed_s": 0.1
     },
     {
@@ -89,8 +191,25 @@
       "evm_percent": 7.0,
       "ber": 0.0,
       "cfo_error": 0.001859375,
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
       "verdict": "PASS",
-      "elapsed_s": 0.1
+      "elapsed_s": 45.4
+    },
+    {
+      "modulation": "OOK",
+      "snr_db": 10,
+      "seed": 7,
+      "classified": "BPSK",
+      "class_top1": true,
+      "class_top2": true,
+      "demod_status": "GOOD",
+      "evm_percent": 11.4,
+      "ber": 0.0,
+      "cfo_error": 4.971590909091071e-06,
+      "verdict": "PASS",
+      "elapsed_s": 0.2
     },
     {
       "modulation": "OOK",
@@ -103,6 +222,23 @@
       "evm_percent": 6.5,
       "ber": 0.0,
       "cfo_error": 4.971590909091071e-06,
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
+      "verdict": "PASS",
+      "elapsed_s": 11.4
+    },
+    {
+      "modulation": "4ASK",
+      "snr_db": 18,
+      "seed": 7,
+      "classified": "4ASK",
+      "class_top1": true,
+      "class_top2": true,
+      "demod_status": "GOOD",
+      "evm_percent": 6.5,
+      "ber": 0.0,
+      "cfo_error": 8.813769028672216e-06,
       "verdict": "PASS",
       "elapsed_s": 0.1
     },
@@ -117,6 +253,23 @@
       "evm_percent": 4.6,
       "ber": 0.0,
       "cfo_error": 5.308398293906412e-06,
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
+      "verdict": "PASS",
+      "elapsed_s": 12.4
+    },
+    {
+      "modulation": "8ASK",
+      "snr_db": 24,
+      "seed": 7,
+      "classified": "8ASK",
+      "class_top1": true,
+      "class_top2": true,
+      "demod_status": "GOOD",
+      "evm_percent": 9.0,
+      "ber": 0.0,
+      "cfo_error": 8.46016839378249e-06,
       "verdict": "PASS",
       "elapsed_s": 0.1
     },
@@ -131,7 +284,25 @@
       "evm_percent": 8.7,
       "ber": 0.0,
       "cfo_error": 8.46016839378249e-06,
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
       "verdict": "PASS",
+      "elapsed_s": 12.3
+    },
+    {
+      "modulation": "16QAM",
+      "snr_db": 18,
+      "seed": 7,
+      "classified": "64QAM",
+      "class_top1": false,
+      "class_top2": false,
+      "demod_status": "GOOD",
+      "evm_percent": 6.1,
+      "ber": 0.0,
+      "cfo_error": 0.0008828124999999999,
+      "verdict": "DEGRADED",
+      "reason": "classification missed",
       "elapsed_s": 0.1
     },
     {
@@ -145,8 +316,25 @@
       "evm_percent": 4.5,
       "ber": 0.0,
       "cfo_error": 0.0047890625,
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
       "verdict": "DEGRADED",
       "reason": "classification missed",
+      "elapsed_s": 16.8
+    },
+    {
+      "modulation": "32QAM",
+      "snr_db": 21,
+      "seed": 7,
+      "classified": "32QAM",
+      "class_top1": true,
+      "class_top2": true,
+      "demod_status": "GOOD",
+      "evm_percent": 4.1,
+      "ber": 0.0,
+      "cfo_error": 9.375000000000008e-05,
+      "verdict": "PASS",
       "elapsed_s": 0.1
     },
     {
@@ -160,7 +348,25 @@
       "evm_percent": 2.8,
       "ber": 0.0,
       "cfo_error": 0.0047890625,
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
       "verdict": "PASS",
+      "elapsed_s": 24.4
+    },
+    {
+      "modulation": "64QAM",
+      "snr_db": 24,
+      "seed": 7,
+      "classified": "256QAM",
+      "class_top1": false,
+      "class_top2": true,
+      "demod_status": "GOOD",
+      "evm_percent": 5.2,
+      "ber": 0.0,
+      "cfo_error": 0.0038125,
+      "verdict": "DEGRADED",
+      "reason": "classification missed",
       "elapsed_s": 0.1
     },
     {
@@ -174,8 +380,25 @@
       "evm_percent": 4.8,
       "ber": 0.0,
       "cfo_error": 0.0047890625,
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
       "verdict": "PASS",
-      "elapsed_s": 0.1
+      "elapsed_s": 17.0
+    },
+    {
+      "modulation": "128QAM",
+      "snr_db": 28,
+      "seed": 7,
+      "classified": "128QAM",
+      "class_top1": true,
+      "class_top2": true,
+      "demod_status": "GOOD",
+      "evm_percent": 3.6,
+      "ber": 0.0,
+      "cfo_error": 0.0038125,
+      "verdict": "PASS",
+      "elapsed_s": 0.2
     },
     {
       "modulation": "128QAM",
@@ -188,8 +411,26 @@
       "evm_percent": 3.3,
       "ber": 0.0,
       "cfo_error": 9.375000000000008e-05,
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
       "verdict": "PASS",
-      "elapsed_s": 0.1
+      "elapsed_s": 21.9
+    },
+    {
+      "modulation": "256QAM",
+      "snr_db": 31,
+      "seed": 7,
+      "classified": "64QAM",
+      "class_top1": false,
+      "class_top2": true,
+      "demod_status": "DEGRADED",
+      "evm_percent": 6.1,
+      "ber": 0.1508,
+      "cfo_error": 0.0047890625,
+      "verdict": "FAIL",
+      "reason": "BER 0.151",
+      "elapsed_s": 0.3
     },
     {
       "modulation": "256QAM",
@@ -202,9 +443,27 @@
       "evm_percent": 6.2,
       "ber": 0.0192,
       "cfo_error": 0.0008828124999999999,
+      "frame_detected": false,
+      "crc_pass": false,
+      "payload_trust": null,
       "verdict": "DEGRADED",
       "reason": "classification missed",
-      "elapsed_s": 0.3
+      "elapsed_s": 18.2
+    },
+    {
+      "modulation": "16APSK",
+      "snr_db": 20,
+      "seed": 7,
+      "classified": "128QAM",
+      "class_top1": false,
+      "class_top2": false,
+      "demod_status": "GOOD",
+      "evm_percent": 8.4,
+      "ber": 0.0,
+      "cfo_error": 0.001859375,
+      "verdict": "DEGRADED",
+      "reason": "classification missed",
+      "elapsed_s": 0.1
     },
     {
       "modulation": "16APSK",
@@ -217,6 +476,24 @@
       "evm_percent": 7.8,
       "ber": 0.0,
       "cfo_error": 0.0047890625,
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
+      "verdict": "DEGRADED",
+      "reason": "classification missed",
+      "elapsed_s": 14.0
+    },
+    {
+      "modulation": "32APSK",
+      "snr_db": 24,
+      "seed": 7,
+      "classified": "128QAM",
+      "class_top1": false,
+      "class_top2": false,
+      "demod_status": "GOOD",
+      "evm_percent": 6.2,
+      "ber": 0.0,
+      "cfo_error": 0.001859375,
       "verdict": "DEGRADED",
       "reason": "classification missed",
       "elapsed_s": 0.1
@@ -232,9 +509,27 @@
       "evm_percent": 5.9,
       "ber": 0.0,
       "cfo_error": 0.001859375,
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
       "verdict": "DEGRADED",
       "reason": "classification missed",
-      "elapsed_s": 0.1
+      "elapsed_s": 36.0
+    },
+    {
+      "modulation": "64APSK",
+      "snr_db": 27,
+      "seed": 7,
+      "classified": "256QAM",
+      "class_top1": false,
+      "class_top2": true,
+      "demod_status": "GOOD",
+      "evm_percent": 6.2,
+      "ber": 0.0,
+      "cfo_error": 0.0008828124999999999,
+      "verdict": "DEGRADED",
+      "reason": "classification missed",
+      "elapsed_s": 0.2
     },
     {
       "modulation": "64APSK",
@@ -247,8 +542,26 @@
       "evm_percent": 6.0,
       "ber": 0.0,
       "cfo_error": 0.001859375,
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
       "verdict": "PASS",
-      "elapsed_s": 0.2
+      "elapsed_s": 16.2
+    },
+    {
+      "modulation": "128APSK",
+      "snr_db": 32,
+      "seed": 7,
+      "classified": "64APSK",
+      "class_top1": false,
+      "class_top2": true,
+      "demod_status": "DEGRADED",
+      "evm_percent": 8.2,
+      "ber": 0.0,
+      "cfo_error": 0.0038125,
+      "verdict": "DEGRADED",
+      "reason": "classification missed",
+      "elapsed_s": 0.4
     },
     {
       "modulation": "128APSK",
@@ -259,11 +572,29 @@
       "class_top2": true,
       "demod_status": "DEGRADED",
       "evm_percent": 8.1,
-      "ber": 0.2983,
+      "ber": 0.0,
       "cfo_error": 0.001859375,
-      "verdict": "FAIL",
-      "reason": "BER 0.298",
-      "elapsed_s": 0.5
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
+      "verdict": "DEGRADED",
+      "reason": "classification missed",
+      "elapsed_s": 14.9
+    },
+    {
+      "modulation": "2FSK",
+      "snr_db": 10,
+      "seed": 7,
+      "classified": "UNKNOWN",
+      "class_top1": false,
+      "class_top2": false,
+      "demod_status": "GOOD",
+      "evm_percent": null,
+      "ber": 0.0,
+      "cfo_error": 0.0003945312499999999,
+      "verdict": "DEGRADED",
+      "reason": "classification missed",
+      "elapsed_s": 0.1
     },
     {
       "modulation": "2FSK",
@@ -276,6 +607,23 @@
       "evm_percent": null,
       "ber": 0.0,
       "cfo_error": 0.001615234375,
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
+      "verdict": "PASS",
+      "elapsed_s": 40.1
+    },
+    {
+      "modulation": "4FSK",
+      "snr_db": 14,
+      "seed": 7,
+      "classified": "4FSK",
+      "class_top1": true,
+      "class_top2": true,
+      "demod_status": "GOOD",
+      "evm_percent": null,
+      "ber": 0.0,
+      "cfo_error": 0.0038125,
       "verdict": "PASS",
       "elapsed_s": 0.1
     },
@@ -290,7 +638,25 @@
       "evm_percent": null,
       "ber": 0.0,
       "cfo_error": 0.0028359375,
+      "frame_detected": true,
+      "crc_pass": true,
+      "payload_trust": "VALIDATED PAYLOAD",
       "verdict": "PASS",
+      "elapsed_s": 34.7
+    },
+    {
+      "modulation": "GMSK",
+      "snr_db": 10,
+      "seed": 7,
+      "classified": "UNKNOWN",
+      "class_top1": false,
+      "class_top2": false,
+      "demod_status": "GOOD",
+      "evm_percent": null,
+      "ber": 0.0517,
+      "cfo_error": 0.0008261718750000001,
+      "verdict": "FAIL",
+      "reason": "BER 0.052",
       "elapsed_s": 0.1
     },
     {
@@ -304,8 +670,21 @@
       "evm_percent": null,
       "ber": 0.0067,
       "cfo_error": 0.0003378906250000001,
+      "frame_detected": false,
+      "crc_pass": false,
+      "payload_trust": null,
       "verdict": "PASS",
-      "elapsed_s": 0.1
+      "elapsed_s": 0.3
+    },
+    {
+      "modulation": "OFDM",
+      "snr_db": 20,
+      "seed": 7,
+      "classified": "OFDM",
+      "class_top1": true,
+      "class_top2": true,
+      "verdict": "PASS",
+      "elapsed_s": 0.0
     },
     {
       "modulation": "OFDM",
