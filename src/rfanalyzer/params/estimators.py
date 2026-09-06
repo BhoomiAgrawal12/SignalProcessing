@@ -212,6 +212,11 @@ def fsk_symbol_rate(x: np.ndarray, min_rate: float = 1e-4) -> dict:
     f_pos, a_pos = freqs[pos], D[pos]
     bg = sig.medfilt(a_pos, kernel_size=51)
     prom = a_pos / (bg + 1e-12)
+    # exclude the mask edges where the one-sided median filter inflates
+    # prominence (same artifact as in symbol_rate)
+    edge = min(26, len(prom) // 4)
+    prom[:edge] = 0.0
+    prom[-26:] = 0.0
     k = int(np.argmax(prom))
     # the transition process is an impulse train: harmonics can outscore
     # the fundamental after background normalisation, so prefer a

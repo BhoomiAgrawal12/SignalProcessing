@@ -431,7 +431,9 @@ def demodulate(x: np.ndarray, modulation: str, sps: float,
         if out.hard_bits is None or not len(out.hard_bits):
             out.demodulation_status = "FAILED"
         return out
-    if family not in ("psk", "oqpsk", "qam", "apsk", "ask"):
+    if family == "oqpsk":
+        return _demod_oqpsk(x, sps, config, res)
+    if family not in ("psk", "qam", "apsk", "ask"):
         res.warnings.append(f"unsupported modulation for demodulation: "
                             f"{modulation}")
         return res
@@ -472,36 +474,13 @@ def _demod_linear(x, modulation, family, sps, config, cfo_norm, res):
     taps = rrc_taps(n_int, config.rrc_span_symbols, config.rrc_rolloff)
     x = sig.fftconvolve(x, taps, mode="same")
 
-    # 2b. OQPSK: advance the quadrature rail by half a symbol so both
-    # rails share the same optimum sampling instant
-    if family == "oqpsk":
-        half = n_int // 2
-        qadv = np.empty_like(x.imag)
-        qadv[:-half] = x.imag[half:]
-        qadv[-half:] = x.imag[-1]
-        x = x.real + 1j * qadv
-
     # eye-diagram trace for the display
     q_eye = max(2, n_int)
     res.lock_metrics["eye_sps"] = q_eye
     res.eye_trace = np.asarray(x[: 200 * q_eye], dtype=np.complex64)
 
-    # 3. timing recovery (feedforward Oerder&Meyr). OQPSK's staggered
-    # rails weaken the |x|^2 symbol tone, so the upstream rate estimate
-    # can be off: when the tone is weak, retry with the strongest
-    # envelope-spectrum candidates and keep the best tone.
+    # 3. timing recovery (feedforward Oerder&Meyr)
     syms, tone, tlock = _timing_recover(x, sps, config.max_symbols)
-    if tone < 0.02 and family == "oqpsk":
-        from ..params.estimators import symbol_rate as _sr
-        for cand in (_sr(x, 1e-3).get("candidates") or [])[:3]:
-            sps_c = 1.0 / cand["rate_norm"]
-            if not (2 <= sps_c <= 64):
-                continue
-            syms_c, tone_c, tlock_c = _timing_recover(x, sps_c,
-                                                      config.max_symbols)
-            if tone_c > tone:
-                syms, tone, tlock = syms_c, tone_c, tlock_c
-                res.samples_per_symbol = sps_c
     res.timing_locked = tlock
     res.lock_metrics["timing_tone_strength"] = round(tone, 4)
     if len(syms) < 32:
@@ -611,14 +590,155 @@ def _demod_linear(x, modulation, family, sps, config, cfo_norm, res):
     return res
 
 
+def _demod_oqpsk(x, sps, config, res):
+    """OQPSK: the staggered rails mix under any carrier rotation, so the
+    carrier must be recovered FIRST (x^4 carries a clean line at 4fc for
+    OQPSK because the offset removes the 180-degree transitions), then the
+    half-symbol stagger is undone and the signal decodes as QPSK. The
+    90-degree ambiguity swaps the rails and thereby flips the stagger
+    direction, so both de-offset directions are tried and the one whose
+    constellation concentrates wins."""
+    x = np.asarray(x, dtype=np.complex128)
+    n = np.arange(len(x))
+
+    # carrier frequency from the x^4 line
+    m = min(len(x), 1 << 16)
+    z = (x[:m] ** 4) * np.hanning(m)
+    Z = np.abs(np.fft.fft(z))
+    k = int(np.argmax(Z))
+    quality = float(Z[k] / (np.median(Z) + 1e-12))
+    fc = float(np.fft.fftfreq(m)[k] / 4)
+    if quality > 15 and abs(fc) < 0.05:
+        x = x * np.exp(-2j * np.pi * fc * n)
+        res.cfo_applied_norm = float(fc)
+    res.lock_metrics["oqpsk_x4_line_quality"] = round(quality, 1)
+    # carrier phase from the time-domain 4th moment (pi/2 ambiguous)
+    c4 = (x[: 1 << 16] ** 4).mean()
+    if np.abs(c4) > 1e-9:
+        phi = (np.angle(c4) - np.pi) / 4.0
+        x = x * np.exp(-1j * phi)
+
+    # symbol rate: the x^2 spectrum carries a line PAIR at 2fc +- Rs.
+    # Data periodicity produces additional strong lines, so only a pair
+    # SYMMETRIC about 2fc (known from the x^4 stage; ~0 after the
+    # correction above) is accepted.
+    z2 = (x[:m] ** 2) * np.hanning(m)
+    Z2 = np.abs(np.fft.fft(z2))
+    freqs2 = np.fft.fftfreq(m)
+    med2 = float(np.median(Z2))
+    peak_idx = np.argsort(Z2)[::-1][:12]
+    best_pair = None
+    for a in range(len(peak_idx)):
+        for b in range(a + 1, len(peak_idx)):
+            fa, fb = freqs2[peak_idx[a]], freqs2[peak_idx[b]]
+            centre = (fa + fb) / 2.0
+            rs_c = abs(fa - fb) / 2.0
+            if abs(centre) < 0.002 and 1e-3 < rs_c < 0.5:
+                q = float(min(Z2[peak_idx[a]], Z2[peak_idx[b]]) / (med2 + 1e-12))
+                if q > 10 and (best_pair is None or q > best_pair[1]):
+                    best_pair = (rs_c, q)
+    if best_pair:
+        sps = 1.0 / best_pair[0]
+        res.lock_metrics["oqpsk_x2_rs_norm"] = round(best_pair[0], 6)
+        res.lock_metrics["oqpsk_x2_pair_quality"] = round(best_pair[1], 1)
+    n_int = max(2, int(round(sps)))
+    if not (2 <= n_int <= 64):
+        n_int = 8
+        sps = 8.0
+
+    taps = rrc_taps(n_int, config.rrc_span_symbols, config.rrc_rolloff)
+    mf = sig.fftconvolve(x, taps, mode="same")
+    half = n_int // 2
+
+    best = None
+    for direction in ("advance_q", "advance_i"):
+        if direction == "advance_q":
+            rail = np.empty_like(mf.imag)
+            rail[:-half] = mf.imag[half:]
+            rail[-half:] = mf.imag[-1]
+            cand = mf.real + 1j * rail
+        else:
+            rail = np.empty_like(mf.real)
+            rail[:-half] = mf.real[half:]
+            rail[-half:] = mf.real[-1]
+            cand = rail + 1j * mf.imag
+        syms, tone, tlock = _timing_recover(cand, sps, config.max_symbols)
+        if len(syms) < 32:
+            continue
+        syms = syms / (np.sqrt((np.abs(syms) ** 2).mean()) + 1e-12)
+        syms, f_r, lq = _symbol_domain_cfo(syms, "OQPSK", "oqpsk")
+        syms, perr, clock = _dd_pll(syms, "OQPSK", config.carrier_loop_bw)
+        conc = float(np.abs(((syms / (np.abs(syms) + 1e-12)) ** 4).mean()))
+        if best is None or conc > best["conc"]:
+            best = {"syms": syms, "tone": tone, "tlock": tlock,
+                    "perr": perr, "clock": clock, "conc": conc,
+                    "direction": direction}
+    if best is None:
+        res.warnings.append("OQPSK timing recovery failed on both rail "
+                            "hypotheses")
+        return res
+    syms = best["syms"]
+    settle = min(len(syms) // 10, 500)
+    syms = syms[settle:]
+    res.timing_locked = best["tlock"]
+    res.carrier_locked = best["clock"] and best["conc"] > 0.2
+    res.lock_metrics.update({
+        "timing_tone_strength": round(best["tone"], 4),
+        "phase_error_rms": round(best["perr"], 4),
+        "rotational_concentration": round(best["conc"], 3),
+        "stagger_direction": best["direction"],
+    })
+    res.samples_per_symbol = float(sps)
+    noise_var = max(1e-4, float(np.var(np.abs(syms)) * 0.5))
+    hard, llrs, evm = slice_symbols(syms, "OQPSK", noise_var)
+    res.symbols = syms.astype(np.complex64)
+    res.hard_bits = hard
+    res.llrs = llrs
+    res.evm_percent = round(evm, 1)
+    _apply_status(res, "OQPSK")
+    return res
+
+
+def _msk_squaring_lines(x: np.ndarray) -> tuple:
+    """Classic squaring estimator for h=0.5 CPM (MSK/GMSK): x^2 carries
+    two spectral lines at 2fc +- Rs/2, so their spacing IS the symbol
+    rate and their midpoint locates the residual carrier.
+    Returns (rs_norm, fc_resid_norm, quality)."""
+    n = min(len(x), 1 << 17)
+    z = (x[:n] ** 2) * np.hanning(n)
+    Z = np.abs(np.fft.fftshift(np.fft.fft(z)))
+    freqs = np.fft.fftshift(np.fft.fftfreq(n))
+    med = float(np.median(Z))
+    k1 = int(np.argmax(Z))
+    guard = max(4, n // 2048)
+    Z2 = Z.copy()
+    Z2[max(0, k1 - guard):k1 + guard] = 0
+    k2 = int(np.argmax(Z2))
+    quality = float(min(Z[k1], Z2[k2]) / (med + 1e-12))
+    rs = float(abs(freqs[k1] - freqs[k2]))
+    fc = float(0.5 * (freqs[k1] + freqs[k2]) / 2)
+    return rs, fc, quality
+
+
 def _demod_gmsk(x, sps, res):
-    """GMSK (h = 0.5): frequency discriminator, Gaussian-matched smoothing,
-    mid-symbol sign decisions. The discriminator sign IS the bit for MSK-
-    family signals, so no carrier loop is needed - only the frequency
-    offset must be removed (it appears as a DC shift of the discriminator).
-    """
+    """GMSK (h = 0.5): squaring-line symbol rate and carrier, frequency
+    discriminator, mid-symbol sign decisions. The discriminator sign IS
+    the bit for MSK-family signals, so no carrier loop is needed."""
+    rs, fc, quality = _msk_squaring_lines(x)
+    if quality > 20 and 1e-3 < rs < 0.5:
+        n_int = int(round(1.0 / rs))
+        x = x * np.exp(-2j * np.pi * fc * np.arange(len(x)))
+        res.lock_metrics["squaring_rs_norm"] = round(rs, 6)
+        res.lock_metrics["squaring_line_quality"] = round(quality, 1)
+    else:
+        n_int = int(round(sps))
+        res.warnings.append("GMSK squaring lines not found: falling back "
+                            "to the upstream symbol-rate estimate")
+    if not (2 <= n_int <= 64):
+        n_int = 8
+
     inst = np.diff(np.unwrap(np.angle(x))) / (2 * np.pi)
-    inst = inst - np.median(inst)          # CFO shows up as DC here
+    inst = inst - np.median(inst)
 
     def sample_at(n_i):
         w = max(2, n_i // 2)
@@ -628,35 +748,9 @@ def _demod_gmsk(x, sps, res):
             sc = float(np.abs(sm[p2::n_i]).mean())
             if sc > best_score:
                 best_score, best_p = sc, p2
-        # normalised margin: mean |freq| at decisions over the h=0.5 peak
         return sm[best_p::n_i], best_score / (0.25 / n_i)
 
-    n_int = int(round(sps))
-    if not (2 <= n_int <= 64):
-        n_int = 8
     samp, margin0 = sample_at(n_int)
-    # an implausible upstream symbol-rate estimate shows up as a weak
-    # discriminator margin: re-derive the period from the sign run
-    # lengths of the discriminator (median run of random NRZ data is one
-    # symbol; sub-3-sample glitch runs are noise and discarded)
-    if margin0 < 0.6:
-        wsm = np.convolve(inst, np.ones(4) / 4, mode="same")
-        sgn = np.sign(wsm)
-        changes = np.flatnonzero(np.diff(sgn) != 0) + 1
-        runs = np.diff(np.concatenate([[0], changes, [len(sgn)]]))
-        runs = runs[runs >= 3]
-        n_run = int(np.median(runs)) if len(runs) else n_int
-        cands = sorted(set(c for c in
-                           [n_run - 1, n_run, n_run + 1, n_int]
-                           if 2 <= c <= 64))
-        best = (margin0, n_int, samp)
-        for cand in cands:
-            s_c, m_c = sample_at(cand)
-            # normalise comparison by candidate period so larger periods
-            # do not win automatically
-            if m_c > best[0]:
-                best = (m_c, cand, s_c)
-        margin0, n_int, samp = best
     dev = 0.25 / n_int                     # theoretical peak deviation
     res.samples_per_symbol = float(n_int)
     res.hard_bits = (samp > 0).astype(np.uint8)
