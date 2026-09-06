@@ -217,7 +217,7 @@ class RFAnalyzer:
         trace.mark("S5", "executed",
                    f"{modulation} (confidence "
                    f"{result.modulation.confidence})")
-        if modulation in ("UNKNOWN", "OFDM", "OOK"):
+        if modulation in ("UNKNOWN", "OFDM"):
             result.warnings.append(
                 f"modulation '{modulation}' is outside the demodulation set; "
                 "stopping after parameter estimation (analyst may override)")
@@ -258,9 +258,29 @@ class RFAnalyzer:
                                 tr[i * 2 * q:(i + 1) * 2 * q].real]
                                for i in range(n_tr)]}
             trace.mark("S6", "executed",
+                       f"status {demod.demodulation_status}, "
                        f"{0 if demod.symbols is None else len(demod.symbols):,}"
                        f" symbols, EVM {demod.evm_percent}%, locks "
                        f"T={demod.timing_locked} C={demod.carrier_locked}")
+            if getattr(demod, "audio", None) is not None:
+                # analog transmission: audio out, the bit layer does not apply
+                a = demod.audio
+                step = max(1, len(a) // 4000)
+                result.plots["audio"] = {
+                    "samples": [round(float(v), 4) for v in a[::step][:4000]],
+                    "decimation": step}
+                result.pipeline_trace = trace.finalize(
+                    "analog transmission: no bit layer")
+                return result
+            if demod.demodulation_status == "FAILED":
+                result.warnings.append(
+                    "S6 quality gate: demodulation FAILED "
+                    f"(EVM {demod.evm_percent}%, locks T={demod.timing_locked} "
+                    f"C={demod.carrier_locked}); the bit layer is withheld "
+                    "rather than fed unreliable bits")
+                result.pipeline_trace = trace.finalize(
+                    "stopped by the S6 quality gate: unreliable demodulation")
+                return result
             if demod.hard_bits is None or len(demod.hard_bits) < 256:
                 result.warnings.append("demodulation produced too few bits "
                                        "for bit-layer analysis")
@@ -333,6 +353,8 @@ class RFAnalyzer:
                                           if result.fec else None),
                     "demod_locked": bool(demod.carrier_locked and
                                          demod.timing_locked),
+                    "demod_status": demod.demodulation_status,
+                    "frame_validated": bool(result.frames is not None),
                 }
                 result.payload_intelligence = analyze_payload(
                     result.payload.data, frames=frames_matrix,
@@ -396,6 +418,13 @@ def _fill_result_from_best(result: AnalysisResult, best: dict):
     if result.fec is not None:
         result.fec.decoded_bits = None   # keep result JSON-sized
     fr = best.get("frames")
+    if fr and not fr.get("valid", True):
+        result.warnings.append(
+            "frame structure candidate rejected: insufficient evidence (" +
+            ", ".join(f"{k}={v}" for k, v in
+                      fr.get("validity_evidence", {}).items()) +
+            "); periodicity alone does not make a frame")
+        fr = None
     if fr:
         analysis = fr["analysis"]
         sync = analysis["sync"]

@@ -34,7 +34,11 @@ class ParamEstConfig:
 @dataclass
 class ModulationConfig:
     classes: list = field(default_factory=lambda: [
-        "BPSK", "QPSK", "8PSK", "16QAM", "64QAM", "2FSK", "4FSK", "OOK"])
+        "BPSK", "QPSK", "OQPSK", "8PSK", "16PSK", "32PSK",
+        "OOK", "4ASK", "8ASK",
+        "16QAM", "32QAM", "64QAM", "128QAM", "256QAM",
+        "16APSK", "32APSK", "64APSK", "128APSK",
+        "2FSK", "4FSK", "GMSK"])
     cvnet_enabled: bool = True
     cvnet_repo: str = "sohelimi/cvnet-rf"
     cvnet_checkpoint: str = ""         # local path; resolved at runtime

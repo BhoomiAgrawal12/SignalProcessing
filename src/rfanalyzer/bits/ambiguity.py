@@ -25,13 +25,11 @@ def enumerate_ambiguities(symbols: np.ndarray, modulation: str,
         return []
     table, _k = CONSTELLATIONS[modulation]
     order = len(table)
-    # a blind carrier loop can lock at any rotational symmetry of the
-    # constellation: every PSK phase for M-PSK, quadrant symmetry for
-    # QAM/APSK/ASK-family maps
-    if modulation.endswith("PSK") and not modulation.endswith("APSK"):
-        n_rot = order
-    else:
-        n_rot = 4
+    # a blind carrier loop can lock at ANY rotation in the constellation's
+    # actual symmetry group (M for M-PSK, 4 for square QAM, 8 for these
+    # 128APSK rings) - enumerating fewer leaves unrecoverable locks
+    from ..demod.constellations import symmetry_order
+    n_rot = symmetry_order(modulation)
     # keep the fan-out bounded: differential variants are dropped first
     # for high-order PSK where rotations alone exhaust the budget
     if n_rot * 2 * 2 > max_streams:

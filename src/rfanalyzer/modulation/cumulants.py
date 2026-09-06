@@ -14,7 +14,13 @@ from ..demod.constellations import CONSTELLATIONS
 
 
 def _features(s: np.ndarray) -> np.ndarray:
-    """[|C20|, |C40|, |C42|, m63] on unit-power samples."""
+    """[|C20|, |C40|, |C42|, m63, |E[u^4]|, |E[u^8]|, |E[u^16]|] on
+    unit-power samples (u = s/|s|).
+
+    The phase-only M-power concentrations separate what the amplitude
+    cumulants cannot: all M-PSK share [0,0,1,1], but u^M concentrates
+    exactly when M is a multiple of the PSK order, and APSK rings keep a
+    partial u^4 concentration that square/cross QAM lacks."""
     s = s / (np.sqrt((np.abs(s) ** 2).mean()) + 1e-12)
     m20 = (s ** 2).mean()
     m21 = (np.abs(s) ** 2).mean()
@@ -24,15 +30,19 @@ def _features(s: np.ndarray) -> np.ndarray:
     c20 = m20 / m21
     c40 = (m40 - 3 * m20 ** 2) / m21 ** 2
     c42 = (m42 - np.abs(m20) ** 2 - 2 * m21 ** 2) / m21 ** 2
-    return np.array([np.abs(c20), np.abs(c40), np.abs(c42), m63 / m21 ** 3])
+    u = s / (np.abs(s) + 1e-12)
+    conc = [np.abs((u ** M).mean()) for M in (4, 8, 16)]
+    return np.array([np.abs(c20), np.abs(c40), np.abs(c42),
+                     m63 / m21 ** 3, *conc])
 
 
 _REFERENCE = {}
 for _name, (_table, _k) in CONSTELLATIONS.items():
     _REFERENCE[_name] = _features(_table.astype(np.complex128))
 
-# feature weights: |C20| separates BPSK sharply; m63 separates QAM orders
-_WEIGHTS = np.array([3.0, 2.0, 2.0, 1.0])
+# feature weights: |C20| separates BPSK sharply; m63 separates QAM
+# orders; the u^M concentrations separate PSK orders and APSK from QAM
+_WEIGHTS = np.array([3.0, 2.0, 2.0, 1.0, 2.0, 1.5, 1.0])
 
 
 def classify_cumulants(symbols: np.ndarray, snr_db: float = None) -> dict:
@@ -65,6 +75,7 @@ def classify_cumulants(symbols: np.ndarray, snr_db: float = None) -> dict:
             "fit_distance": round(d_best, 3),
             "no_constellation_mass": round(1.0 - fit_penalty, 3),
             "features": [round(float(x), 4) for x in f],
-            "feature_names": ["|C20|", "|C40|", "|C42|", "m63"],
+            "feature_names": ["|C20|", "|C40|", "|C42|", "m63",
+                              "|E[u4]|", "|E[u8]|", "|E[u16]|"],
             "reference": {k: [round(float(x), 3) for x in v]
                           for k, v in _REFERENCE.items()}}

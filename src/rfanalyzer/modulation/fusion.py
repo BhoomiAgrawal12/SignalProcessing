@@ -62,6 +62,30 @@ def classify_modulation(x: np.ndarray, params, config) -> ModulationHypothesis:
     # FSK first: a slow FSK's tone dwell also produces bursty lag
     # correlation that can mimic an OFDM cyclic prefix.
     if params.fsk_tone_count:
+        # h=0.5 CPM (MSK/GMSK) leaves a decisive x^2 line pair at
+        # 2fc +- Rs/2; rectangular M-FSK does not (its pair sits at the
+        # full tone spacing and the histogram already resolves it)
+        from ..demod.receiver import _msk_squaring_lines
+        rs2, _fc2, q2 = _msk_squaring_lines(np.asarray(x[: 1 << 17]))
+        # h-index disambiguation: the x^2 line spacing measures h*Rs
+        # products, so Rs must come independently from the transition
+        # line. h=1 rectangular FSK has a sharp transition line and
+        # rs2 = 2*Rs; h=0.5 GMSK has rs2 = Rs and a smeared transition
+        # line. Only call GMSK when the x^2 pair is strong AND the h=1
+        # relationship does not hold.
+        rs_t = params.symbol_rate_norm
+        is_h1_fsk = bool(rs_t and rs2 > 0 and
+                         abs(rs2 - 2 * rs_t) < 0.3 * rs2)
+        if q2 > 60 and not is_h1_fsk:
+            return ModulationHypothesis(
+                prediction="GMSK", confidence=round(min(1.0, q2 / 120), 3),
+                alternatives=[["GMSK", round(min(1.0, q2 / 120), 3)],
+                              ["2FSK", 0.2]],
+                engine_predictions={"squaring_lines": ["GMSK", round(q2, 1)]},
+                constraints_applied=[
+                    "constant envelope with x^2 line pair at 2fc +- Rs/2 "
+                    "(h=0.5 continuous-phase signature)"],
+                in_distribution=True)
         label = f"{params.fsk_tone_count}FSK"
         conf = params.confidences.get("fsk", {}).get("value", 0.5)
         constraints.append(f"instantaneous-frequency histogram shows "

@@ -65,7 +65,10 @@ def test_provenance_caps_confidence():
     r = analyze_payload(b"HELLO WORLD " * 20,
                         provenance={"crc_validated": False})
     assert all(f["confidence"] <= 0.8 for f in r["findings"])
-    assert any("WITHOUT CRC" in l for l in r["limitations"])
+    assert any("without CRC" in l or "WITHOUT CRC" in l
+               for l in r["limitations"])
+    assert r["summary"].get("trust") in ("SPECULATIVE PAYLOAD",
+                                         "PROBABLE PAYLOAD")
 
 
 def test_ipv4_checksum_validation():

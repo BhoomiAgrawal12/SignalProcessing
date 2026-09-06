@@ -202,6 +202,41 @@ def bitlayer_search(streams: list, config, fec_config, framing_config,
                             if h2:
                                 pol_bits, fr, hits = cand_bits, fr2, h2
                                 break
+                    # sync-anchored bit-level rotations: the true frame
+                    # phase need not be byte-aligned relative to where the
+                    # decoded stream happens to start, but every strong
+                    # constant run is a candidate frame anchor
+                    if not hits and fl % 8 == 0:
+                        # wraparound-aware: a sync word split across the
+                        # current stacking boundary appears as two short
+                        # runs at the frame edges, so runs are scanned on
+                        # the doubled entropy array
+                        ent = fr["entropy"]
+                        ent2 = np.concatenate([ent, ent])
+                        runs, i2 = [], 0
+                        while i2 < len(ent2):
+                            if ent2[i2] < 0.15:
+                                j2 = i2
+                                while j2 < len(ent2) and ent2[j2] < 0.15:
+                                    j2 += 1
+                                if j2 - i2 >= 6 and i2 < fl:
+                                    runs.append((min(j2 - i2, fl), i2 % fl))
+                                i2 = j2
+                            else:
+                                i2 += 1
+                        runs = sorted(set(runs), reverse=True)
+                        for _rl, anchor in runs[:4]:
+                            if anchor == 0:
+                                continue
+                            cand_bits = pol_bits[anchor:]
+                            if len(cand_bits) < 4 * fl:
+                                continue
+                            fr2 = analyze_frames(cand_bits, fl)
+                            h2 = crc_hunt(fr2["frames"],
+                                          framing_config.crc_candidates)
+                            if h2:
+                                pol_bits, fr, hits = cand_bits, fr2, h2
+                                break
                     if frame_result is None or hits:
                         frame_result = {"frame_length": fl, "analysis": fr,
                                         "candidates": frame_cands,
@@ -211,6 +246,27 @@ def bitlayer_search(streams: list, config, fec_config, framing_config,
                     if hits:
                         break
                 if frame_result:
+                    fr0 = frame_result["analysis"]
+                    sync0 = fr0["sync"]
+                    n_fr = len(fr0["frames"])
+                    stab = frame_result["candidates"][0].get("stability", 0)
+                    crc_ok = bool(crc_hits and
+                                  crc_hits[0]["pass_fraction"] > 0.9)
+                    # evidence-gated frame validity: a CRC pass is
+                    # conclusive; otherwise demand a real sync word, high
+                    # column stability and enough frames - periodicity
+                    # alone must never mint a frame structure
+                    valid = crc_ok or (sync0.get("found") and
+                                       sync0.get("length_bits", 0) >= 16 and
+                                       stab > 0.35 and n_fr >= 8)
+                    frame_result["valid"] = bool(valid)
+                    frame_result["validity_evidence"] = {
+                        "crc_pass": crc_ok,
+                        "sync_found": bool(sync0.get("found")),
+                        "sync_bits": int(sync0.get("length_bits", 0) or 0),
+                        "column_stability": round(float(stab), 3),
+                        "n_frames": n_fr,
+                    }
                     node.add_evidence("frame_stability",
                                       min(1.0, frame_result["candidates"][0]["score"]))
                     node.add_evidence("crc", crc_hits[0]["pass_fraction"]

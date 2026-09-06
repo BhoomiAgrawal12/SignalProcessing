@@ -149,7 +149,7 @@ def fsk_tones(x: np.ndarray, max_tones: int = 8) -> dict:
     xx = x[:n]
     amp_all = np.abs(xx)
     cv = float(amp_all.std() / (amp_all.mean() + 1e-12))
-    if cv > 0.22:
+    if cv > 0.17:
         return {"is_fsk": False, "amplitude_cv": cv}
     ph = np.unwrap(np.angle(xx))
     inst_raw = np.diff(ph) / (2 * np.pi)

@@ -121,6 +121,31 @@ CONSTELLATIONS = {
     "128APSK": _apsk(128),
 }
 
+def constellation_symmetry(name: str) -> int:
+    """Order of the rotational symmetry group: the largest k such that
+    rotation by 2pi/k maps the constellation onto itself. This is the
+    number of indistinguishable carrier-lock rotations a blind receiver
+    must enumerate (e.g. 4 for square QAM, 8 for these 128APSK rings,
+    M for M-PSK)."""
+    table, _k = CONSTELLATIONS[name]
+    pts = np.sort_complex(np.round(table, 6))
+    best = 1
+    for k in (2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64):
+        rot = np.sort_complex(np.round(table * np.exp(2j * np.pi / k), 6))
+        if np.allclose(np.abs(pts - rot), 0, atol=1e-4):
+            best = k
+    return best
+
+
+_SYMMETRY_CACHE = {name: None for name in CONSTELLATIONS}
+
+
+def symmetry_order(name: str) -> int:
+    if _SYMMETRY_CACHE.get(name) is None:
+        _SYMMETRY_CACHE[name] = constellation_symmetry(name)
+    return _SYMMETRY_CACHE[name]
+
+
 # family lookup used by the receiver dispatch and the quality gate
 MOD_FAMILY = {}
 for _name in CONSTELLATIONS:

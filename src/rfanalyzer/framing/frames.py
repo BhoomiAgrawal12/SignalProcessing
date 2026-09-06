@@ -62,6 +62,10 @@ def find_frame_length(bits: np.ndarray, min_len: int = 16,
         raw = float(np.abs(col_mean - 0.5).mean()) * 2
         stability = max(0.0, raw - 0.7979 / np.sqrt(n_rows))
         score = float(dev[P]) + stability
+        # real protocols are overwhelmingly byte-aligned: prefer multiples
+        # of 8 when scores are close (also what the CRC hunter needs)
+        if P % 8 == 0:
+            score *= 1.08
         cands.append({"length": P, "score": score,
                       "autocorr": float(ac[P]), "stability": stability})
     cands.sort(key=lambda c: -c["score"])

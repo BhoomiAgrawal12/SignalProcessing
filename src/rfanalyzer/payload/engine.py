@@ -73,12 +73,27 @@ def analyze_payload(data: bytes, bits=None, frames=None,
     # Standalone byte analysis (empty provenance) is not capped.
     crc_ok = bool(provenance.get("crc_validated"))
     fec_rate = provenance.get("fec_syndrome_rate")
+    demod_status = provenance.get("demod_status")
     cap = 1.0
     limitations = []
-    if provenance and not crc_ok:
-        cap = 0.8
-        limitations.append("payload was recovered WITHOUT CRC validation; "
-                           "all findings are capped accordingly")
+    trust = None
+    if provenance:
+        if crc_ok:
+            trust, cap = "VALIDATED PAYLOAD", 1.0
+        elif (fec_rate or 0) > 0.95 and demod_status in (None, "GOOD"):
+            trust, cap = "PROBABLE PAYLOAD", 0.85
+            limitations.append("no CRC validation: payload is PROBABLE, "
+                               "based on FEC syndrome consistency only")
+        elif demod_status == "DEGRADED" or (fec_rate is not None and
+                                            fec_rate < 0.9):
+            trust, cap = "SPECULATIVE PAYLOAD", 0.6
+            limitations.append("upstream quality is degraded and the frame "
+                               "is not CRC-validated: every finding here is "
+                               "SPECULATIVE")
+        else:
+            trust, cap = "SPECULATIVE PAYLOAD", 0.7
+            limitations.append("payload was recovered without CRC "
+                               "validation; findings are capped")
     if fec_rate is not None and fec_rate < 0.9:
         cap = min(cap, 0.7)
         limitations.append(f"FEC syndrome-zero rate was {fec_rate:.2f}; "
@@ -98,6 +113,8 @@ def analyze_payload(data: bytes, bits=None, frames=None,
         summary = {"classification": encryption.verdict,
                    "confidence": round(encryption.confidence, 3),
                    "strength": confidence_band(encryption.confidence)}
+    if trust:
+        summary["trust"] = trust
 
     # messages: strip raw bytes before serialisation
     msg_out = []
@@ -122,7 +139,9 @@ def analyze_payload(data: bytes, bits=None, frames=None,
         "findings": [f.to_dict() for f in findings],
         "provenance": {"crc_validated": crc_ok,
                        "fec_syndrome_rate": fec_rate,
-                       "demod_locked": provenance.get("demod_locked")},
+                       "demod_locked": provenance.get("demod_locked"),
+                       "demod_status": demod_status,
+                       "trust": trust},
         "limitations": limitations + [
             "S11 interprets recovered bytes; it never invents meaning - "
             "unknown is a valid result"],

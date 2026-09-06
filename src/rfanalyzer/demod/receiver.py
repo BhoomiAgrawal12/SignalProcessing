@@ -176,8 +176,8 @@ _CFO_STRATEGY = {
 # EVM to decode, so their gates are tighter.
 _EVM_GATES = {
     "BPSK": (25, 45), "QPSK": (18, 32), "OQPSK": (18, 32), "8PSK": (12, 22),
-    "16PSK": (7, 13), "32PSK": (4, 8),
-    "OOK": (30, 50), "4ASK": (15, 28), "8ASK": (8, 16),
+    "16PSK": (7, 13), "32PSK": (7.5, 12),
+    "OOK": (30, 50), "4ASK": (15, 28), "8ASK": (10, 18),
     "16QAM": (12, 20), "32QAM": (9, 16), "64QAM": (7, 12),
     "128QAM": (5, 9), "256QAM": (3.5, 7),
     "16APSK": (10, 18), "32APSK": (8, 14), "64APSK": (7, 11),
@@ -232,6 +232,17 @@ def _ring_info(table: np.ndarray) -> list:
     return rings
 
 
+def _ring_gate_width(table: np.ndarray, radius: float) -> float:
+    """Half-width for gating symbols onto one ring: at most 30% of the
+    radius but never past the midpoint to the neighbouring ring (dense
+    APSK rings sit close and cross-ring leakage biases the phase
+    statistic)."""
+    radii = sorted(r for r, _n in _ring_info(table))
+    gaps = [abs(radius - r) for r in radii if abs(radius - r) > 1e-6]
+    min_gap = min(gaps) if gaps else radius
+    return float(min(0.3 * radius, 0.45 * min_gap))
+
+
 def _nearest_distance(syms: np.ndarray, table: np.ndarray,
                       n_probe: int = 2048) -> float:
     """Mean distance to the nearest constellation point (unit-power
@@ -255,7 +266,8 @@ def _rotational_concentration(syms: np.ndarray, modulation: str,
     if family == "apsk":
         rings = _ring_info(table)
         radius, n_pts = max(rings, key=lambda rn: rn[1])
-        band = np.abs(np.abs(syms) - radius) < 0.25 * radius
+        band = np.abs(np.abs(syms) - radius) < \
+            _ring_gate_width(table, radius)
         if band.sum() < 32:
             return 0.0
         return float(np.abs((u[band] ** n_pts).mean()))
@@ -295,7 +307,8 @@ def _vv_feedforward(syms: np.ndarray, modulation: str, family: str,
             rings = _ring_info(table)
             radius, n_pts = max(rings, key=lambda rn: rn[1])
             M = n_pts
-            gate = np.abs(np.abs(syms) - radius) < 0.3 * radius
+            gate = np.abs(np.abs(syms) - radius) < \
+                _ring_gate_width(table, radius)
             u = syms / (np.abs(syms) + 1e-12)
             z = np.where(gate, u ** M, 0)
             tri = table[np.abs(np.abs(table) - radius) < 1e-3]
@@ -540,14 +553,36 @@ def _demod_linear(x, modulation, family, sps, config, cfo_norm, res):
             # resolved against the WHOLE table
             rings = _ring_info(table)
             m_dom = max(rings, key=lambda rn: rn[1])[1]
-            probe = syms[: 3072]
-            best_phi, best_d = 0.0, np.inf
-            for kk2 in range(m_dom):
-                phi = kk2 * 2 * np.pi / m_dom
-                rot = probe * np.exp(-1j * phi)
-                d = np.abs(rot[:, None] - table[None, :]).min(axis=1).mean()
-                if d < best_d:
-                    best_d, best_phi = d, phi
+            probe = syms[: 20000]
+            n_sym_full = 2 * np.pi / m_dom
+            # the dominant ring is invariant under exactly these rotations
+            # and carries NO coset information while dominating the symbol
+            # count: gate it OUT and let the other rings discriminate
+            radius_dom = max(rings, key=lambda rn: rn[1])[0]
+            off_dom = np.abs(np.abs(probe) - radius_dom) > \
+                _ring_gate_width(table, radius_dom)
+            probe_d = probe[off_dom] if off_dom.sum() > 256 else probe
+            cand_ds = []
+            # rotations inside the constellation's own symmetry group are
+            # identical: only the distinct cosets are candidates
+            from .constellations import symmetry_order
+            sym = symmetry_order(modulation)
+            for kk2 in range(max(1, m_dom // sym)):
+                phi = kk2 * n_sym_full
+                rot = probe_d * np.exp(-1j * phi)
+                d = np.abs(rot[:, None] - table[None, :]).min(axis=1)
+                # trimmed mean: outliers (decision-boundary symbols) carry
+                # no rotation information and only blur the margin
+                d = np.sort(d)[: int(0.8 * len(d))].mean()
+                cand_ds.append((float(d), phi))
+            cand_ds.sort()
+            best_d, best_phi = cand_ds[0]
+            margin = (cand_ds[1][0] - best_d) / (best_d + 1e-12)
+            res.lock_metrics["apsk_snap_margin"] = round(float(margin), 3)
+            if margin < 0.02:
+                res.warnings.append(
+                    "APSK ring-rotation ambiguity is marginal (snap margin "
+                    f"{margin:.3f}); the bit mapping may be rotated")
             if best_phi:
                 syms = syms * np.exp(-1j * best_phi)
         syms = _phase_polish(syms, modulation, 201)
@@ -804,6 +839,11 @@ def _demod_analog(x, modulation, res):
         if modulation.endswith("SC"):
             res.warnings.append("suppressed-carrier SSB: absolute audio "
                                 "pitch is ambiguous without the carrier")
+    # post-detection audio low-pass: the discriminator/envelope output
+    # carries wideband noise (FM click noise especially) far above the
+    # message band; audio lives well below ~0.05 cycles/sample here
+    lpf = sig.firwin(129, 0.05)
+    audio = sig.fftconvolve(audio, lpf, mode="same")
     audio = audio / (np.abs(audio).max() + 1e-12)
     # audio quality: tonal concentration of the demodulated spectrum
     A = np.abs(np.fft.rfft(audio[:min(len(audio), 1 << 16)]))
