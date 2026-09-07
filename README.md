@@ -127,8 +127,10 @@ rendered in the browser with no upload.
 ## Tests and benchmarks
 
 ```bash
-pytest                       # 32 unit/integration tests + 5 end-to-end
-python scripts/benchmark.py --big
+pytest                            # 49 unit/integration/end-to-end tests
+python scripts/benchmark.py --big # performance table below
+python scripts/validate_matrix.py # ground-truth matrix, all modulations
+node web/test-node.js             # browser engine regression (4 cases)
 ```
 
 Measured on an Apple M5 (10 cores), all report targets are met:
@@ -166,6 +168,25 @@ truth (blind classification, known-modulation BER, full blind chain with
 frames/CRC/payload trust) and writes `docs/validation_report.json` with a
 PASS/DEGRADED/FAIL verdict per case.
 
+Latest full run (49 cases: 27 modulations, two SNR points each for the
+digital set, full blind chain at the flagship SNR):
+
+```text
+30 PASS, 17 DEGRADED, 2 FAIL
+
+- all 21 digital modulations demodulate at BER 0.000-0.007 at their
+  family-appropriate SNR
+- 17 of 19 framed modulations complete the entire blind chain to a
+  CRC-validated payload (trust: VALIDATED PAYLOAD)
+- every DEGRADED digital case decodes at BER 0.000: the degradations are
+  blind-classification name confusions among lookalike dense
+  constellations (16/64/256-QAM neighbours, APSK vs cross-QAM,
+  OQPSK reads as QAM before carrier recovery), tracked with top-2
+- the 2 FAILs are physics at the low-SNR points (256QAM at 31 dB gated
+  DEGRADED with BER 0.15, GMSK at 10 dB with BER 0.05), reported by the
+  quality gate rather than hidden
+```
+
 ## Evidence gates and trust
 
 The pipeline is evidence-driven: S6 gates on EVM/locks/rotational
@@ -197,13 +218,19 @@ pipeline flow recorded by the engine.
   attempted; that is a successful outcome, not a failure.
 - Blind FEC/interleaver identification degrades above roughly 5% raw BER
   (fundamental to rank-based methods); improve demodulation first.
+- Blind classification confuses lookalike dense constellations even when
+  demodulation is perfect; the analyst override (or the correct family
+  hint) recovers the full chain in those cases.
+- 128APSK carrier-coset resolution and 256QAM near their SNR floors gate
+  DEGRADED with an explicit ambiguity warning instead of guessing.
 - LDPC identification uses candidate-set matching (known H matrices,
   deterministic seeds or loaded standards); reconstruction of an
   arbitrary unknown H remains out of scope and is stated in the result.
 - Pseudo-random interleavers: the period is detected, the permutation is
   reported unrecovered unless many aligned frames are available.
-- OFDM is detected and parameterised (FFT size, CP length) but not
-  demodulated.
+- OFDM is detected with multi-evidence (CP correlation, symbol-period
+  recurrence, half-consistency, comb structure) and parameterised (FFT
+  size, CP length) but not demodulated to subcarrier bits.
 - DVB-length whiteners are phase-searched over a truncated window (512
   phases of 32767) at interactive speed; the truncation is reported.
 - The GNU Radio `.grc` export targets GR 3.10 block ids and is generated
