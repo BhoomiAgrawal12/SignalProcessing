@@ -58,44 +58,82 @@ def _timing_recover(x: np.ndarray, sps: float,
         return np.zeros(0, dtype=np.complex128), 0.0, False
 
     env = np.abs(x) ** 2
-    block = max(Q * 64, 512)
+    # Pin the envelope tone frequency before the block-phase fit: the
+    # nominal rate can be off by a few percent (near-Nyquist bins, line
+    # competition at low SNR), which drifts more than Q/2 per block and
+    # aliases the unwrap below. A parabolic peak fit near 1/Q measures
+    # the true tone to a fraction of a bin.
+    T = float(Q)
+    nwin = int(min(n, 1 << 18))
+    nfft = int(min(1 << 18, 1 << (int(np.ceil(np.log2(max(nwin, 16)))) + 2)))
+    if nwin >= 32 * Q:
+        E = np.abs(np.fft.rfft((env[:nwin] - env[:nwin].mean()) *
+                               np.hanning(nwin), nfft))
+        lo = int(np.floor(0.94 * nfft / Q))
+        hi = min(int(np.ceil(1.06 * nfft / Q)) + 1, len(E) - 2)
+        if lo >= 2 and hi - lo > 4:
+            k0 = lo + int(np.argmax(E[lo:hi]))
+            med = float(np.median(E[lo:hi])) + 1e-12
+            if E[k0] > 4 * med:
+                am, bm, cm = float(E[k0 - 1]), float(E[k0]), float(E[k0 + 1])
+                den = am - 2 * bm + cm
+                delta = 0.5 * (am - cm) / den if abs(den) > 1e-12 else 0.0
+                f_ref = (k0 + float(np.clip(delta, -0.5, 0.5))) / nfft
+                if abs(f_ref * Q - 1.0) < 0.08:
+                    T = 1.0 / f_ref
+    block = max(int(T * 64), 512)
     n_blocks = max(1, n // block)
-    mus, weights, centers = [], [], []
-    k = np.exp(-2j * np.pi * np.arange(block) / Q)
+    cs, weights = [], []
+    k = np.exp(-2j * np.pi * np.arange(block) / T)
     for b in range(n_blocks):
         seg = env[b * block:(b + 1) * block]
         if len(seg) < Q * 8:
             break
         c = (seg * k[:len(seg)]).sum()
-        strength = np.abs(c) / (seg.sum() + 1e-12)
-        mu = (-np.angle(c) / (2 * np.pi)) * Q   # timing offset in samples
-        mus.append(mu)
-        weights.append(strength)
-        centers.append(b * block)
-    mus = np.array(mus)
-    weights = np.array(weights)
-    tone = float(weights.mean())
-    # unwrap modulo-Q jumps between consecutive blocks
-    for i in range(1, len(mus)):
-        while mus[i] - mus[i - 1] > Q / 2:
-            mus[i] -= Q
-        while mus[i] - mus[i - 1] < -Q / 2:
-            mus[i] += Q
-    centers = np.array(centers, dtype=np.float64)
-    if len(mus) >= 2:
-        # weighted linear fit: mu(t) = mu0 + drift * t  (clock offset)
-        A = np.vstack([np.ones_like(centers), centers]).T
-        Wd = np.diag(weights / (weights.sum() + 1e-12))
-        coef, *_ = np.linalg.lstsq(Wd @ A, Wd @ mus, rcond=None)
-        mu0, drift = float(coef[0]), float(coef[1])
+        # re-reference the block phase to global time zero: the block
+        # length is generally NOT a multiple of the (fractional) symbol
+        # period, and per-block references would masquerade as a huge
+        # fake clock drift of (block mod T)/block per sample
+        c = c * np.exp(-2j * np.pi * (b * block) / T)
+        weights.append(np.abs(c) / (seg.sum() + 1e-12))
+        cs.append(c)
+    cs = np.asarray(cs, dtype=np.complex128)
+    weights = np.asarray(weights)
+    tone = float(weights.mean()) if len(weights) else 0.0
+    if len(cs) == 0:
+        return np.zeros(0, dtype=np.complex128), 0.0, False
+    # complex-domain offset + drift: averaging c_b * conj(c_{b-1}) gives
+    # the mean per-block phase increment without an unwrap chain, so one
+    # noisy block cannot corrupt every later block's timing estimate
+    if len(cs) >= 2:
+        # coarse slope from lag-1 products (wrap-safe), then a weighted
+        # regression on the detrended residual phases: lag-1 alone has
+        # regression-grade bias-freedom but not regression-grade
+        # variance, and dense QAM cannot afford the accumulated timing
+        # error of a noisy slope
+        dphi = float(np.angle((cs[1:] * np.conj(cs[:-1])).sum()))
+        idx = np.arange(len(cs), dtype=np.float64)
+        det = cs * np.exp(-1j * dphi * idx)
+        mean_ang = float(np.angle(det.sum()))
+        phi_r = np.angle(det * np.exp(-1j * mean_ang))
+        w = weights / (weights.sum() + 1e-12)
+        i_m = float((w * idx).sum())
+        p_m = float((w * phi_r).sum())
+        var = float((w * (idx - i_m) ** 2).sum())
+        slope = (float((w * (idx - i_m) * (phi_r - p_m)).sum()) / var
+                 if var > 0 else 0.0)
+        phi0 = mean_ang + p_m - slope * i_m
+        dphi_t = dphi + slope
+        drift = -dphi_t / (2 * np.pi) * T / block   # timing samples/sample
+        mu0 = float(-phi0 / (2 * np.pi) * T)
     else:
-        mu0, drift = float(mus[0]) if len(mus) else 0.0, 0.0
+        mu0, drift = float(-np.angle(cs[0]) / (2 * np.pi) * T), 0.0
     # symbol sampling instants, cubic Lagrange interpolation (linear
     # interpolation leaves an ISI floor of several percent EVM, which is
     # irrelevant for QPSK but fatal for 128/256-QAM decisions)
-    n_sym = min((n - Q) // Q, max_symbols)
+    n_sym = min(int((n - Q) // T), max_symbols)
     kk = np.arange(n_sym)
-    t = mu0 % Q + kk * (Q + drift * Q)
+    t = mu0 % T + kk * (T + drift * T)
     t = t[(t >= 1) & (t < n - 2)]
     i0 = t.astype(int)
     f = t - i0
@@ -430,6 +468,14 @@ def demodulate(x: np.ndarray, modulation: str, sps: float,
     res.demodulation_status."""
     x = np.asarray(x, dtype=np.complex128)
     family = MOD_FAMILY.get(modulation)
+    if family in ("psk", "oqpsk", "qam", "apsk", "ask") and 0 < sps < 3.0:
+        # Oerder&Meyr timing needs about 3+ samples per symbol; near
+        # Nyquist-rate recordings are upsampled 2x first (CFO is in
+        # cycles/sample, so the normalised offset halves with the rate)
+        x = sig.resample_poly(x, 2, 1)
+        sps *= 2.0
+        if cfo_norm is not None:
+            cfo_norm = cfo_norm / 2.0
     res = DemodulationResult(modulation=modulation, samples_per_symbol=sps)
     res.demodulation_status = "FAILED"
 
