@@ -127,7 +127,7 @@ rendered in the browser with no upload.
 ## Tests and benchmarks
 
 ```bash
-pytest                            # 49 unit/integration/end-to-end tests
+pytest                            # 53 unit/integration/end-to-end tests
 python scripts/benchmark.py --big # performance table below
 python scripts/validate_matrix.py # ground-truth matrix, all modulations
 node web/test-node.js             # browser engine regression (4 cases)
@@ -172,24 +172,36 @@ Latest full run (49 cases: 27 modulations, two SNR points each for the
 digital set, full blind chain at the flagship SNR):
 
 ```text
-30 PASS, 17 DEGRADED, 2 FAIL
+43 PASS, 3 DEGRADED, 3 FAIL
 
 - all 21 digital modulations demodulate at BER 0.000-0.007 at their
   family-appropriate SNR
+- blind classification names 26 of 27 modulations correctly at the
+  flagship SNR: S5 trial-demodulates its shortlist with the real S6
+  receiver and a candidate only wins if it LOCKS (EVM against its own
+  calibrated gate, constellation occupancy, residual-bias structure),
+  which eliminated the earlier name confusions among lookalike dense
+  constellations
 - 17 of 19 framed modulations complete the entire blind chain to a
-  CRC-validated payload (trust: VALIDATED PAYLOAD)
-- every DEGRADED digital case decodes at BER 0.000: the degradations are
-  blind-classification name confusions among lookalike dense
-  constellations (16/64/256-QAM neighbours, APSK vs cross-QAM,
-  OQPSK reads as QAM before carrier recovery), tracked with top-2
-- the 2 FAILs are physics at the low-SNR points (256QAM at 31 dB gated
-  DEGRADED with BER 0.15, GMSK at 10 dB with BER 0.05), reported by the
-  quality gate rather than hidden
+  CRC-validated payload (trust: VALIDATED PAYLOAD), and in 19 of 21
+  full-chain runs the extracted payload is byte-for-byte a contiguous
+  substring of the transmitted payload (the other 2 are the BER-limited
+  cases below, where the CRC gate correctly withholds trust)
+- the 3 DEGRADED are honesty, not errors: 128APSK at both SNRs decodes
+  at BER 0.000 but stays gated DEGRADED by its EVM margin, and 2FSK at
+  10 dB decodes at BER 0.000 with the classification withheld as
+  UNKNOWN rather than guessed
+- the 3 FAILs are physics at the SNR floor (256QAM at 31/37 dB with a
+  720-symbol burst, GMSK at 10 dB with BER 0.05), reported by the
+  quality gates rather than hidden
 ```
 
 ## Evidence gates and trust
 
-The pipeline is evidence-driven: S6 gates on EVM/locks/rotational
+The pipeline is evidence-driven: S5 only names a constellation that
+locks in a real receiver trial (EVM against the candidate's own gate,
+point occupancy, residual-bias structure) and withholds the claim as
+UNKNOWN when nothing locks; S6 gates on EVM/locks/rotational
 concentration; S10 accepts a frame only with a CRC pass or a sync word
 plus cross-frame stability (rejections are reported with their evidence);
 S11 grades its input VALIDATED / PROBABLE / SPECULATIVE from the CRC, FEC
@@ -218,9 +230,10 @@ pipeline flow recorded by the engine.
   attempted; that is a successful outcome, not a failure.
 - Blind FEC/interleaver identification degrades above roughly 5% raw BER
   (fundamental to rank-based methods); improve demodulation first.
-- Blind classification confuses lookalike dense constellations even when
-  demodulation is perfect; the analyst override (or the correct family
-  hint) recovers the full chain in those cases.
+- Blind classification of dense constellations near their SNR floor can
+  report a lookalike neighbour as a close second (256QAM vs 128QAM at a
+  matched EVM); the receiver-trial detail in the report shows both locks
+  and the analyst override recovers the full chain in those cases.
 - 128APSK carrier-coset resolution and 256QAM near their SNR floors gate
   DEGRADED with an explicit ambiguity warning instead of guessing.
 - LDPC identification uses candidate-set matching (known H matrices,
