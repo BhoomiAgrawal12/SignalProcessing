@@ -139,10 +139,10 @@ Measured on an Apple M5 (10 cores), all report targets are met:
 |------------------------------------------|---------:|----------|
 | wideband detection (2M samples)           |   0.17 s | < 2 s    |
 | symbol-rate estimation                    |   0.05 s | 1-5 s    |
-| demodulation of 106k symbols              |   0.63 s | < 1 s    |
+| demodulation of 106k symbols              |   0.74 s | < 1 s    |
 | GF(2) rank scan L=2..512, 50k bits        |   0.79 s | 5-30 s   |
-| FEC identification                        |   0.89 s | 10-60 s  |
-| end-to-end, one clean signal (full stack) |   9.2 s  | < 90 s   |
+| FEC identification                        |   0.85 s | 10-60 s  |
+| end-to-end, one clean signal (full stack) |   6.3 s  | < 90 s   |
 | 1 GB IQ file to first waterfall (memmap)  |   0.09 s | < 3 s    |
 
 ## Supported modulations (S6 demodulation)
