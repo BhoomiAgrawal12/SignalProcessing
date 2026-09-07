@@ -21,8 +21,13 @@ def occupied_bandwidth(x: np.ndarray, fraction: float = 0.99) -> dict:
                      detrend=False)
     idx = np.argsort(f)
     f, p = f[idx], p[idx]
-    # noise floor subtraction for a defensible OBW on noisy captures
-    floor = np.median(p)
+    # noise floor subtraction for a defensible OBW on noisy captures;
+    # the floor tracks the bin-to-bin variability (few Welch averages
+    # leave exponential noise residue above the bare median that would
+    # otherwise dominate the 99% integral at low SNR)
+    med = np.median(p)
+    mad = np.median(np.abs(p - med))
+    floor = med + 2.0 * 1.4826 * mad
     ps = np.clip(p - floor, 0, None)
     total = ps.sum()
     if total <= 0:
@@ -30,8 +35,11 @@ def occupied_bandwidth(x: np.ndarray, fraction: float = 0.99) -> dict:
     c = np.cumsum(ps) / total
     lo = f[np.searchsorted(c, (1 - fraction) / 2)]
     hi = f[min(np.searchsorted(c, 1 - (1 - fraction) / 2), len(f) - 1)]
-    peak = ps.max()
-    above = f[ps > peak / 2]
+    # smooth before the -3dB read: a single noisy bin must not define
+    # the peak nor the crossing points
+    ps_s = np.convolve(ps, np.ones(9) / 9.0, mode="same")
+    peak = ps_s.max()
+    above = f[ps_s > peak / 2]
     obw3 = float(above[-1] - above[0]) if len(above) else None
     centroid = float((f * ps).sum() / total)
     return {"obw99": float(hi - lo), "obw3db": obw3, "f_center": centroid,
@@ -332,6 +340,39 @@ def estimate_parameters(x: np.ndarray, config, sample_rate=None,
     if sr["candidates"]:
         p.symbol_rate_norm = sr["candidates"][0]["rate_norm"]
         p.samples_per_symbol = 1.0 / p.symbol_rate_norm
+        cands = [c["rate_norm"] for c in sr["candidates"][:5]]
+        p.symbol_rate_candidates = list(cands)
+        # bandwidth-implied candidates: a shaped linear modulation's
+        # rate sits near OBW99/(1+rolloff) (clean SNR) and near the -3dB
+        # bandwidth (noise-robust; OBW99 integrates the noise floor at
+        # low SNR). A near-full band suggests a Nyquist-rate recording.
+        # At low SNR data lines can outrank the true rate line, so
+        # runner-up lines near an implied rate are promoted and the
+        # implied rates themselves are appended as hypotheses of last
+        # resort for the downstream receiver trials.
+        implied = []
+        if bw.get("obw99"):
+            implied.append(bw["obw99"] / 1.35)
+            if bw["obw99"] > 0.45:
+                implied.append(0.5)
+        if bw.get("obw3db"):
+            implied.append(min(bw["obw3db"], 0.5))
+        promoted, extras = [], []
+        for imp in implied:
+            near = [r for r in cands[1:]
+                    if abs(r - imp) <= 0.12 * imp and r not in promoted]
+            promoted.extend(near)
+            if not near and all(abs(imp - e) > 0.05 * imp
+                                for e in extras):
+                extras.append(imp)
+        rest = [r for r in cands[1:] if r not in promoted]
+        seen, ordered = set(), []
+        for r in cands[:1] + promoted + extras + rest:
+            key = round(r, 4)
+            if key not in seen:
+                seen.add(key)
+                ordered.append(r)
+        p.symbol_rate_candidates = ordered
         p.confidences["symbol_rate"] = Confidence(
             sr["confidence"], "cyclic periodogram (delay-product sweep)").to_dict()
     else:

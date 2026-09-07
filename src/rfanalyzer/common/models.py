@@ -184,6 +184,10 @@ class SignalParameters:
     obw3db_norm: Optional[float] = None
     symbol_rate_norm: Optional[float] = None   # symbols/sample
     samples_per_symbol: Optional[float] = None
+    # ranked alternatives from the cyclic periodogram: at low SNR data
+    # lines can outrank the true rate line, so downstream hypothesis
+    # tests must be able to revisit the runners-up
+    symbol_rate_candidates: list = field(default_factory=list)
     # absolute - only when sample rate known
     sample_rate: Optional[float] = None
     carrier_offset_hz: Optional[float] = None
