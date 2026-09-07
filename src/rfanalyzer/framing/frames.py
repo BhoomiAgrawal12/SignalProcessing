@@ -138,30 +138,43 @@ def classify_fields(entropy: np.ndarray, sync_thr: float = 0.15,
 
 def extract_sync_word(frames: np.ndarray, entropy: np.ndarray,
                       sync_thr: float = 0.15) -> dict:
-    """The longest run of near-constant columns is the sync word."""
+    """The near-constant column run anchored at the frame start is the
+    sync word. The frame alignment upstream is already fixed by rank and
+    CRC evidence, so a real sync word sits at bit 0; structured payloads
+    (constant text characters) produce interior constant runs that can
+    be LONGER than the sync word and must not steal the label."""
     const = entropy < sync_thr
-    best_start, best_len = 0, 0
-    i = 0
-    n = len(const)
+    runs = []
+    i, n = 0, len(const)
     while i < n:
         if const[i]:
             j = i
             while j < n and const[j]:
                 j += 1
-            if j - i > best_len:
-                best_start, best_len = i, j - i
+            runs.append((i, j - i))
             i = j
         else:
             i += 1
+    anchored = [r for r in runs if r[0] == 0 and r[1] >= 8]
+    if anchored:
+        best_start, best_len = anchored[0]
+    else:
+        best_start, best_len = max(runs, key=lambda r: r[1],
+                                   default=(0, 0))
     if best_len < 8:
         return {"found": False}
-    maj = (frames[:, best_start:best_start + best_len].mean(axis=0) > 0.5).astype(np.uint8)
-    pad = (-len(maj)) % 8
-    padded = np.concatenate([maj, np.zeros(pad, dtype=np.uint8)])
+    # report whole bytes: a constant run often extends a few bits past
+    # the true word (constant MSB of a following counter field)
+    word_len = (best_len // 8) * 8 if best_len >= 16 else best_len
+    maj = (frames[:, best_start:best_start + best_len].mean(axis=0)
+           > 0.5).astype(np.uint8)
+    word = maj[:word_len] if word_len else maj
+    pad = (-len(word)) % 8
+    padded = np.concatenate([word, np.zeros(pad, dtype=np.uint8)])
     word_hex = np.packbits(padded).tobytes().hex()
     return {"found": True, "offset_bits": int(best_start),
-            "length_bits": int(best_len), "hex": word_hex,
-            "bits": maj}
+            "length_bits": int(best_len), "word_bits": int(len(word)),
+            "hex": word_hex, "bits": maj}
 
 
 def analyze_frames(bits: np.ndarray, frame_length: int) -> dict:

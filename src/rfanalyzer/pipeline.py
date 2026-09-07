@@ -456,27 +456,75 @@ def _fill_result_from_best(result: AnalysisResult, best: dict):
 
 
 def _extract_payload(frames_mat: np.ndarray, analysis: dict, crc) -> bytes:
-    ent = analysis["entropy"]
+    """Payload = the CRC-protected data section minus sync and header.
+
+    Per-byte-column behaviour across frames separates the fields: the
+    sync run and counter-like bytes are header; a constant byte inside
+    the data section still belongs to the payload when it matches the
+    payload's content class (text payloads legitimately contain constant
+    label characters, which a pure entropy rule would misfile as sync
+    and silently drop from every frame)."""
     sync = analysis["sync"]
+    n_bits = frames_mat.shape[1]
     start_bit = 0
     if sync.get("found"):
         start_bit = sync["offset_bits"] + sync["length_bits"]
         # keep the payload byte-aligned: a constant run can end mid-byte
-        # (e.g. constant text characters bordering a varying field) and a
-        # bit-shifted slice would garble every downstream byte analysis
+        # (constant MSBs of a following counter field) and a bit-shifted
+        # slice would garble every downstream byte analysis
         start_bit -= start_bit % 8
-    end_bit = frames_mat.shape[1]
+    end_bit = n_bits
     if crc:
         end_bit = min(end_bit, crc["crc_byte_offset"] * 8)
     if end_bit <= start_bit:
-        start_bit, end_bit = 0, frames_mat.shape[1]
-    out = bytearray()
-    for row in frames_mat:
-        seg = row[start_bit:end_bit]
-        n8 = (len(seg) // 8) * 8
-        if n8:
-            out.extend(np.packbits(seg[:n8]).tobytes())
-    return bytes(out)
+        start_bit, end_bit = 0, n_bits
+    n_bytes = (end_bit - start_bit) // 8
+    if n_bytes <= 0:
+        out = bytearray()
+        for row in frames_mat:
+            seg = row[start_bit:end_bit]
+            n8 = (len(seg) // 8) * 8
+            if n8:
+                out.extend(np.packbits(seg[:n8]).tobytes())
+        return bytes(out)
+    vals = np.packbits(
+        frames_mat[:, start_bit:start_bit + n_bytes * 8], axis=1)
+
+    def _is_counter(v):
+        if len(v) < 4:
+            return False
+        d = np.diff(v.astype(np.int16)) % 256
+        top, cnt = np.unique(d, return_counts=True)
+        best = int(top[np.argmax(cnt)])
+        return best != 0 and cnt.max() >= 0.8 * len(d)
+
+    def _printable_frac(v):
+        return float(np.mean(((v >= 0x20) & (v < 0x7f)) |
+                             (v == 9) | (v == 10) | (v == 13)))
+
+    # core = varying, non-counter byte columns. Structured text varies
+    # only in the low bits of each character, so a mean-bit-entropy
+    # threshold would miss it entirely.
+    core = [i for i in range(n_bytes)
+            if not np.all(vals[:, i] == vals[0, i])
+            and not _is_counter(vals[:, i])]
+    core_text = bool(core) and float(
+        np.mean([_printable_frac(vals[:, i]) for i in core])) > 0.9
+    first = 0
+    while first < n_bytes:
+        v = vals[:, first]
+        if _is_counter(v):
+            first += 1
+            continue
+        if np.all(v == v[0]):
+            if core_text and _printable_frac(v) == 1.0:
+                break        # constant text character: payload label
+            first += 1
+            continue
+        break                # varying non-counter byte: payload begins
+    if first >= n_bytes:
+        first = 0
+    return vals[:, first:].tobytes()
 
 
 def _psd_plot(x: np.ndarray) -> dict:
