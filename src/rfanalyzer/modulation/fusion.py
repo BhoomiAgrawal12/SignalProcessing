@@ -51,20 +51,43 @@ def _occupancy(symbols, candidate) -> float:
 
 
 def _grid_structure(symbols, candidate) -> float:
-    """(EVM off-grid - EVM on-grid) / EVM off-grid for a half-sector
-    rotation. Near 0 for a structureless cloud, large for a real lock."""
-    from ..demod.constellations import CONSTELLATIONS, symmetry_order
+    """Decision-directed residual-bias structure score in [0, 1].
+
+    A true lock leaves residuals CENTRED on each constellation point
+    (per-point mean near zero); a structureless cloud quantised onto the
+    same table leaves residuals biased along the cloud's local density
+    gradient inside every decision region. Unlike an off-grid-rotation
+    baseline this cannot be fooled by dense rings whose angular pitch
+    divides the rotation angle."""
+    from ..demod.constellations import CONSTELLATIONS
     table, _k = CONSTELLATIONS[candidate]
     t = np.asarray(table, dtype=np.complex128)
     t = t / (np.sqrt((np.abs(t) ** 2).mean()) + 1e-12)
     sset = np.asarray(symbols[:4096], dtype=np.complex128)
     sset = sset / (np.sqrt((np.abs(sset) ** 2).mean()) + 1e-12)
-    d_on = np.min(np.abs(sset[:, None] - t[None, :]), axis=1)
-    rot = np.exp(1j * np.pi / symmetry_order(candidate))
-    d_off = np.min(np.abs((sset * rot)[:, None] - t[None, :]), axis=1)
-    e_on = float(np.sqrt((d_on ** 2).mean()))
-    e_off = float(np.sqrt((d_off ** 2).mean()))
-    return (e_off - e_on) / max(e_off, 1e-9)
+    idx = np.argmin(np.abs(sset[:, None] - t[None, :]), axis=1)
+    resid = sset - t[idx]
+    # project out the common linear error (residual gain, rotation, DC):
+    # those are receiver imperfections that scale with the point, not
+    # evidence of a cloud; a cloud's density-gradient bias is nonlinear
+    # in position and survives this projection
+    A = np.vstack([t[idx], np.ones_like(idx, dtype=np.complex128)]).T
+    coef, *_ = np.linalg.lstsq(A, resid, rcond=None)
+    resid = resid - A @ coef
+    rms = float(np.sqrt((np.abs(resid) ** 2).mean())) + 1e-12
+    biases = []
+    for pt in np.unique(idx):
+        r = resid[idx == pt]
+        if len(r) >= 6:
+            # noise-debiased: a centred Gaussian still shows |mean| of
+            # about rms/sqrt(n), which must not count as cloud bias
+            raw = float(np.abs(r.mean()))
+            floor = float(np.sqrt((np.abs(r) ** 2).mean())) / np.sqrt(len(r))
+            biases.append(max(0.0, raw - floor))
+    if not biases:
+        return 0.0
+    bias_ratio = float(np.median(biases)) / rms
+    return max(0.0, 1.0 - bias_ratio)
 
 
 def _trial_one(x, candidate, sps, demod_cfg):
@@ -92,12 +115,12 @@ def _trial_one(x, candidate, sps, demod_cfg):
     # measured EVM only counts as evidence if rotating the symbols half
     # a symmetry sector off the grid makes the fit clearly worse
     structure = _grid_structure(res.symbols, candidate)
-    if structure < 0.2:
+    if structure < 0.5:
         return {"status": res.demodulation_status, "evm": evm,
                 "occupancy": round(occ, 3),
                 "structure": round(structure, 3),
                 "sps": round(float(sps), 3), "score": None}
-    score = (bonus + min(3.0, margin)) * occ * min(1.0, structure / 0.5)
+    score = (bonus + min(3.0, margin)) * occ * min(1.0, structure / 0.8)
     return {"status": res.demodulation_status, "evm": evm,
             "occupancy": round(occ, 3), "structure": round(structure, 3),
             "sps": round(float(sps), 3), "score": round(float(score), 3)}
@@ -288,6 +311,18 @@ def classify_modulation(x: np.ndarray, params, config) -> ModulationHypothesis:
                     trial_detail[c] = _trial_one(xs, c, sps, demod_cfg)
             best = max(trial_detail, key=_sc) if trial_detail else None
         if best is None or _sc(best) < 2.0:
+            # representatives did not lock either: every remaining linear
+            # class gets a hearing in fused-probability order (the true
+            # class of a high-order signal, e.g. 32APSK, may sit outside
+            # both the shortlist and the representative set)
+            for c, _p in ranked:
+                if MOD_FAMILY.get(c) in _LINEAR_FAMILIES and \
+                        c not in trial_detail:
+                    trial_detail[c] = _trial_one(xs, c, sps, demod_cfg)
+                    if _sc(c) >= 2.0:
+                        break
+            best = max(trial_detail, key=_sc) if trial_detail else None
+        if best is None or _sc(best) < 2.0:
             # still nothing: at low SNR the elected symbol-rate line is
             # sometimes a data line, so revisit the runner-up rate
             # candidates before concluding anything
@@ -321,7 +356,11 @@ def classify_modulation(x: np.ndarray, params, config) -> ModulationHypothesis:
                     f"receiver trial overruled {top}: {best} locks at "
                     f"EVM {t_best['evm']}% ({t_best['status']}) while "
                     f"{top} {loser}")
-            scored = sorted((c for c in trial_detail if _sc(c) > 0),
+            # probability mass only over candidates that clear the
+            # acceptance bar: sub-threshold locks stay visible in the
+            # trial detail but must not dilute the winner below the
+            # UNKNOWN cutoff by sheer headcount
+            scored = sorted((c for c in trial_detail if _sc(c) >= 0.8),
                             key=lambda c: (-_sc(c), -fused.get(c, 0.0)))
             exps_t = {c: float(np.exp(_sc(c))) for c in scored}
             z_t = sum(exps_t.values())

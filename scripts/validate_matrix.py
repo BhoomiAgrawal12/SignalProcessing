@@ -171,6 +171,16 @@ def run_case(mod, snr, seed, cfg, analyzer, full_chain):
                                    fr.frames.crc["pass_fraction"] > 0.9)
             pi = fr.payload_intelligence or {}
             row["payload_trust"] = (pi.get("summary") or {}).get("trust")
+            # ground-truth payload equality: the extracted bytes must be
+            # a contiguous substring of the transmitted payload (blind
+            # acquisition legitimately loses frames at the burst edges)
+            truth_payload = (bytes.fromhex("".join(gt.payloads))
+                             if getattr(gt, "payloads", None) else b"")
+            extracted = fr.payload.data if fr.payload else b""
+            row["payload_match"] = bool(
+                truth_payload and extracted and
+                extracted in truth_payload and
+                len(extracted) >= len(truth_payload) // 2)
 
     good_ber = ber < 0.02
     gate_honest = (res.demodulation_status == "FAILED") == (ber > 0.1) or \
@@ -215,6 +225,7 @@ def main():
                       f"BER={str(row.get('ber', '-')):8s} "
                       f"CRC={str(row.get('crc_pass', '-')):5s} "
                       f"trust={str(row.get('payload_trust', '-')):20s} "
+                      f"pay={str(row.get('payload_match', '-')):5s} "
                       f"-> {row['verdict']}")
     n = len(rows)
     n_pass = sum(r["verdict"] == "PASS" for r in rows)
