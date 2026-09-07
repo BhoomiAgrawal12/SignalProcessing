@@ -14,10 +14,93 @@ import numpy as np
 from scipy import signal as sig
 
 from ..common.models import ModulationHypothesis
+from ..demod.constellations import MOD_FAMILY
 from ..demod.filters import rrc_taps
-from ..demod.receiver import _coarse_cfo, _timing_recover
+from ..demod.receiver import (_EVM_GATES, _coarse_cfo, _timing_recover,
+                              demodulate)
 from .cumulants import classify_cumulants
 from .cvnet import classify_cvnet
+
+_LINEAR_FAMILIES = ("psk", "oqpsk", "qam", "apsk", "ask")
+# family representatives tried when the fused shortlist itself fails to
+# lock: smeared clouds most often steal probability from these sparse
+# tables, so they must always get a hearing
+_TRIAL_FALLBACK = ["BPSK", "QPSK", "8PSK", "16QAM", "64QAM",
+                   "4ASK", "16APSK"]
+
+
+def _occupancy(symbols, candidate) -> float:
+    """Normalised entropy of the constellation hit histogram.
+
+    Sparse tables embed in dense ones up to gain (QPSK corners ARE four
+    16QAM points), so nearest-point EVM alone cannot reject the denser
+    table; a true signal exercises all of its points, an embedded subset
+    leaves most of them empty."""
+    from ..demod.constellations import CONSTELLATIONS
+    table, _k = CONSTELLATIONS[candidate]
+    t = np.asarray(table, dtype=np.complex128)
+    t = t / (np.sqrt((np.abs(t) ** 2).mean()) + 1e-12)
+    sset = np.asarray(symbols[:8192], dtype=np.complex128)
+    sset = sset / (np.sqrt((np.abs(sset) ** 2).mean()) + 1e-12)
+    idx = np.argmin(np.abs(sset[:, None] - t[None, :]), axis=1)
+    hist = np.bincount(idx, minlength=len(t)).astype(np.float64)
+    pr = hist / hist.sum()
+    pr = pr[pr > 0]
+    h = float(-(pr * np.log2(pr)).sum())
+    return h / max(np.log2(len(t)), 1.0)
+
+
+def _grid_structure(symbols, candidate) -> float:
+    """(EVM off-grid - EVM on-grid) / EVM off-grid for a half-sector
+    rotation. Near 0 for a structureless cloud, large for a real lock."""
+    from ..demod.constellations import CONSTELLATIONS, symmetry_order
+    table, _k = CONSTELLATIONS[candidate]
+    t = np.asarray(table, dtype=np.complex128)
+    t = t / (np.sqrt((np.abs(t) ** 2).mean()) + 1e-12)
+    sset = np.asarray(symbols[:4096], dtype=np.complex128)
+    sset = sset / (np.sqrt((np.abs(sset) ** 2).mean()) + 1e-12)
+    d_on = np.min(np.abs(sset[:, None] - t[None, :]), axis=1)
+    rot = np.exp(1j * np.pi / symmetry_order(candidate))
+    d_off = np.min(np.abs((sset * rot)[:, None] - t[None, :]), axis=1)
+    e_on = float(np.sqrt((d_on ** 2).mean()))
+    e_off = float(np.sqrt((d_off ** 2).mean()))
+    return (e_off - e_on) / max(e_off, 1e-9)
+
+
+def _trial_one(x, candidate, sps, demod_cfg):
+    """Trial-demodulate one candidate with the real S6 receiver and
+    score the lock against that constellation's own calibrated EVM gate.
+    Raw nearest-point EVM always improves with table density, so EVM is
+    only comparable across candidates after normalising by the gate; the
+    occupancy factor rejects subset embeddings the EVM cannot see."""
+    try:
+        res = demodulate(x, candidate, sps, demod_cfg)
+    except Exception:
+        return None
+    evm = res.evm_percent
+    gate = _EVM_GATES.get(candidate)
+    locked = res.timing_locked and res.carrier_locked
+    if (evm is None or gate is None or not locked or
+            res.symbols is None or len(res.symbols) < 256):
+        return {"status": res.demodulation_status, "evm": evm,
+                "sps": round(float(sps), 3), "score": None}
+    margin = gate[0] / max(float(evm), 0.1)
+    bonus = {"GOOD": 1.0, "DEGRADED": 0.5}.get(res.demodulation_status, 0.0)
+    occ = _occupancy(res.symbols, candidate)
+    # off-grid-rotation baseline: a Gaussian blob sits at blob-level
+    # nearest-point EVM on any dense grid (with full occupancy), so the
+    # measured EVM only counts as evidence if rotating the symbols half
+    # a symmetry sector off the grid makes the fit clearly worse
+    structure = _grid_structure(res.symbols, candidate)
+    if structure < 0.2:
+        return {"status": res.demodulation_status, "evm": evm,
+                "occupancy": round(occ, 3),
+                "structure": round(structure, 3),
+                "sps": round(float(sps), 3), "score": None}
+    score = (bonus + min(3.0, margin)) * occ * min(1.0, structure / 0.5)
+    return {"status": res.demodulation_status, "evm": evm,
+            "occupancy": round(occ, 3), "structure": round(structure, 3),
+            "sps": round(float(sps), 3), "score": round(float(score), 3)}
 
 # CVNet (RadioML) label -> our label; None = out of our supported set
 CVNET_MAP = {
@@ -176,6 +259,82 @@ def classify_modulation(x: np.ndarray, params, config) -> ModulationHypothesis:
     ranked = sorted(fused.items(), key=lambda kv: -kv[1])
     top, top_p = ranked[0]
 
+    # ---- receiver-trial arbitration -------------------------------------
+    # Cumulant features are measured on crudely synchronised symbols, so a
+    # smeared cloud can sit nearest to a lookalike dense constellation.
+    # The decisive evidence is whether the real S6 receiver LOCKS: trial
+    # the shortlist, score each candidate's EVM against its own gate, and
+    # let lock quality overrule feature distance.
+    trial_detail = {}
+    if MOD_FAMILY.get(top) in _LINEAR_FAMILIES:
+        from ..common.config import DemodConfig
+        demod_cfg = DemodConfig()
+        xs = np.asarray(x[: 1 << 16], dtype=np.complex128)
+        shortlist = [c for c, _p in ranked
+                     if MOD_FAMILY.get(c) in _LINEAR_FAMILIES][:3]
+
+        def _sc(c):
+            t = trial_detail.get(c)
+            return -1.0 if not t or t["score"] is None else t["score"]
+
+        for c in shortlist:
+            trial_detail[c] = _trial_one(xs, c, sps, demod_cfg)
+        best = max(trial_detail, key=_sc) if trial_detail else None
+        if best is None or _sc(best) < 2.0:
+            # nothing locked cleanly: give the family representatives a
+            # hearing before concluding anything
+            for c in _TRIAL_FALLBACK:
+                if c in classes and c not in trial_detail:
+                    trial_detail[c] = _trial_one(xs, c, sps, demod_cfg)
+            best = max(trial_detail, key=_sc) if trial_detail else None
+        if best is None or _sc(best) < 2.0:
+            # still nothing: at low SNR the elected symbol-rate line is
+            # sometimes a data line, so revisit the runner-up rate
+            # candidates before concluding anything
+            alt_sps = []
+            for r in getattr(params, "symbol_rate_candidates", [])[1:6]:
+                cand_sps = 1.0 / max(r, 1e-6)
+                if 1.9 <= cand_sps <= 64 and \
+                        abs(cand_sps - sps) > 0.25 and \
+                        all(abs(cand_sps - a) > 0.25 for a in alt_sps):
+                    alt_sps.append(cand_sps)
+            for s_alt in alt_sps[:3]:
+                for c in _TRIAL_FALLBACK[:5]:
+                    if c not in classes:
+                        continue
+                    t = _trial_one(xs, c, s_alt, demod_cfg)
+                    if t and (t["score"] or 0) > max(
+                            0.0, _sc(c) if c in trial_detail else 0.0):
+                        trial_detail[c] = t
+                best = max(trial_detail, key=_sc) if trial_detail else None
+                if best is not None and _sc(best) >= 2.0:
+                    break
+        if best is not None and _sc(best) >= 0.8:
+            if best != top:
+                t_best = trial_detail[best]
+                t_top = trial_detail.get(top)
+                loser = ("fails its own EVM gate" if not t_top or
+                         t_top["score"] is None else
+                         f"locks worse relative to its gate "
+                         f"(EVM {t_top['evm']}%)")
+                constraints.append(
+                    f"receiver trial overruled {top}: {best} locks at "
+                    f"EVM {t_best['evm']}% ({t_best['status']}) while "
+                    f"{top} {loser}")
+            scored = sorted((c for c in trial_detail if _sc(c) > 0),
+                            key=lambda c: (-_sc(c), -fused.get(c, 0.0)))
+            exps_t = {c: float(np.exp(_sc(c))) for c in scored}
+            z_t = sum(exps_t.values())
+            trial_probs = {c: min(0.95, exps_t[c] / z_t) for c in scored}
+            ranked = ([(c, trial_probs[c]) for c in scored] +
+                      [(c, 0.0) for c, _p in ranked if c not in scored])
+            top, top_p = ranked[0]
+        else:
+            constraints.append(
+                "no shortlisted constellation locks in the receiver "
+                "trial: single-carrier claim withheld")
+            top_p = min(top_p, 0.2)
+
     engine_preds = {}
     if cum:
         cb = max(cum["probabilities"].items(), key=lambda kv: kv[1])
@@ -200,4 +359,7 @@ def classify_modulation(x: np.ndarray, params, config) -> ModulationHypothesis:
     if cum:
         hyp.engine_predictions["cumulant_features"] = dict(
             zip(cum["feature_names"], cum["features"]))
+    if trial_detail:
+        hyp.engine_predictions["receiver_trial"] = {
+            c: t for c, t in trial_detail.items() if t is not None}
     return hyp
