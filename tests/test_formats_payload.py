@@ -27,6 +27,7 @@ def qpsk_text():
 
 
 @pytest.mark.parametrize("ext", ["iq", "wav", "sigmf"])
+@pytest.mark.slow
 def test_format_roundtrip_payload(tmp_path, config, qpsk_text, ext):
     iq, gt = qpsk_text
     path = str(tmp_path / f"sig.{ext}")
@@ -52,6 +53,7 @@ def test_format_roundtrip_payload(tmp_path, config, qpsk_text, ext):
     assert (pi.get("summary") or {}).get("trust") == "VALIDATED PAYLOAD"
 
 
+@pytest.mark.slow
 def test_random_payload_match(tmp_path, config):
     """Random (binary-class) payloads must also survive field stripping."""
     fac = WaveformFactory(seed=5)

@@ -44,6 +44,69 @@ class Confidence:
                 "verdict": self.verdict.value}
 
 
+class EstimateState(str, enum.Enum):
+    """Whether a measurement actually measured what it claims to.
+
+    Report §9 rule 1 - separate measurement from decisions.  An estimator
+    must be able to say "I ran, but my answer is a floor" (``saturated``)
+    or "the observable I need is not present" (``unresolvable``) instead
+    of returning a number that reads like a measurement.
+    """
+    VALID = "valid"                # the number means what it says
+    SATURATED = "saturated"        # the number is a bound, not a value
+    UNRESOLVABLE = "unresolvable"  # no usable observable; value is None
+
+
+@dataclass
+class Estimate:
+    """One measured quantity: value + confidence + method + state.
+
+    ``value`` is always in the estimator's natural units and is ``None``
+    when nothing could be measured.  Consumers MUST look at ``state``
+    before using ``value`` as a measurement: a saturated SNR of 5.6 dB
+    means "at least 5.6 dB", not "5.6 dB", and a decision rule keyed on
+    ``snr < 15`` would otherwise fire permanently (report §3.3).
+    """
+    value: Optional[float] = None
+    confidence: float = 0.0
+    method: str = ""
+    state: EstimateState = EstimateState.VALID
+    verdict: Verdict = Verdict.ESTIMATED
+    detail: dict = field(default_factory=dict)
+
+    @property
+    def usable(self) -> bool:
+        """True only when the value may be used as a measured number."""
+        return self.value is not None and self.state == EstimateState.VALID
+
+    @property
+    def lower_bound(self) -> Optional[float]:
+        """The value read as a bound: identical for VALID, a floor for
+        SATURATED, undefined for UNRESOLVABLE."""
+        if self.state == EstimateState.UNRESOLVABLE:
+            return None
+        return self.value
+
+    def to_dict(self) -> dict:
+        d = {"value": (None if self.value is None
+                       else round(float(self.value), 6)),
+             "confidence": round(float(self.confidence), 4),
+             "method": self.method,
+             "state": self.state.value,
+             "verdict": self.verdict.value}
+        if self.detail:
+            d["detail"] = self.detail
+        return d
+
+    def to_confidence_dict(self) -> dict:
+        """Legacy ``confidences`` shape (value/method/verdict) kept so the
+        GUI, the web viewer and existing exports keep working; the state
+        is appended so nothing is lost."""
+        return {"value": round(float(self.confidence), 4),
+                "method": self.method, "verdict": self.verdict.value,
+                "state": self.state.value}
+
+
 def _json_default(o: Any):
     if isinstance(o, complex) or isinstance(o, np.complexfloating):
         return {"re": float(o.real), "im": float(o.imag)}
@@ -78,11 +141,19 @@ class Recording:
     sample_rate_source: str = "unknown"  # "wav_header" | "sigmf" | "user" | "unknown"
     center_frequency: Optional[float] = None
     center_frequency_source: str = "unknown"
+    file_sha256: str = ""              # digest of the source file as stored
+    file_size_bytes: int = 0
     datatype: str = ""                 # source storage dtype, e.g. "int16"
     endianness: str = ""               # "little" | "big" | ""
     channels: int = 1
     timestamp: Optional[str] = None
     format_confidence: float = 1.0
+    # True for a single real-valued channel (mono WAV from an SSB/audio
+    # receiver).  Its spectrum is conjugate symmetric, so S1 converts it
+    # to the analytic signal and S2 searches only the positive half -
+    # without that, the mirror image doubles every detection box and the
+    # two halves merge into "the whole band" (report §10.2).
+    is_real_signal: bool = False
     sniff_report: dict = field(default_factory=dict)
     warnings: list = field(default_factory=list)
 
@@ -103,8 +174,11 @@ class Recording:
             "sample_rate_source": self.sample_rate_source,
             "center_frequency": self.center_frequency,
             "center_frequency_source": self.center_frequency_source,
+            "file_sha256": self.file_sha256,
+            "file_size_bytes": self.file_size_bytes,
             "datatype": self.datatype, "endianness": self.endianness,
-            "channels": self.channels, "n_samples": self.n_samples,
+            "channels": self.channels, "is_real_signal": self.is_real_signal,
+            "n_samples": self.n_samples,
             "duration_s": self.duration_s, "timestamp": self.timestamp,
             "format_confidence": self.format_confidence,
             "sniff_report": self.sniff_report, "warnings": self.warnings,
@@ -123,6 +197,7 @@ class ConditioningReport:
     clipping_fraction: float = 0.0
     dead_air_fraction: float = 0.0
     noise_floor_db: Optional[float] = None
+    analytic_conversion: bool = False   # real input -> analytic signal
     warnings: list = field(default_factory=list)
 
 
@@ -142,6 +217,16 @@ class SignalSegment:
     confidence: float = 0.0
     sample_rate: Optional[float] = None    # of the parent recording
     id: int = 0
+    # --- segmentation provenance (report §9 layer A: a RANKED segment
+    # list, not segs[0]) -------------------------------------------------
+    method: str = ""              # which detector produced this box
+    resolution_bins: int = 0      # analysis FFT length that found it
+    power_fraction: float = 0.0   # share of above-floor power inside the box
+    density_gain_db: float = 0.0  # 10log10(power_fraction / bandwidth): how
+    #                               much denser the box is than the average
+    #                               of the analysed band; 0 dB = the whole band
+    rank_score: float = 0.0       # score used to order the segment list
+    notes: list = field(default_factory=list)
 
     @property
     def center_norm(self) -> float:
@@ -164,7 +249,13 @@ class SignalSegment:
              "f_low_norm": self.f_low_norm, "f_high_norm": self.f_high_norm,
              "center_norm": self.center_norm,
              "bandwidth_norm": self.bandwidth_norm,
-             "snr_db": round(self.snr_db, 2), "confidence": self.confidence}
+             "snr_db": round(self.snr_db, 2), "confidence": self.confidence,
+             "method": self.method,
+             "resolution_bins": self.resolution_bins,
+             "power_fraction": round(float(self.power_fraction), 4),
+             "density_gain_db": round(float(self.density_gain_db), 2),
+             "rank_score": round(float(self.rank_score), 3),
+             "notes": list(self.notes)}
         if self.sample_rate:
             d.update({"f_low_hz": self.absolute("f_low"),
                       "f_high_hz": self.absolute("f_high"),
@@ -201,10 +292,72 @@ class SignalParameters:
     ofdm_fft_size: Optional[int] = None
     ofdm_cp_length: Optional[int] = None
     confidences: dict = field(default_factory=dict)  # name -> Confidence dict
+    # --- measurement layer (report §9 rule 1) ---------------------------
+    # name -> Estimate dict.  ``confidences`` above stays for backwards
+    # compatibility; ``estimates`` is the authoritative record because it
+    # carries the validity state that ``confidences`` cannot express.
+    estimates: dict = field(default_factory=dict)
+    # ``valid`` | ``saturated`` | ``unresolvable`` for snr_db; consumers
+    # that gate on an SNR THRESHOLD must check this first (report §3.3).
+    # ``snr_db`` is Es/N0 (noise in one symbol rate of bandwidth): the
+    # quantity EVM measures, the one that predicts BER, and the one that
+    # survives channelisation unchanged.
+    snr_state: str = "valid"
+    snr_method: str = ""
+    snr_full_band_db: Optional[float] = None   # over the whole channel
+    # what the front end measured before S6 reconciliation, kept so a
+    # disagreement between S4 and S6 stays visible instead of being
+    # silently overwritten (report §11 item 7)
+    symbol_rate_norm_s4: Optional[float] = None
+    carrier_offset_norm_s4: Optional[float] = None
+    snr_db_s4: Optional[float] = None
+    # one entry per quantity S6 corrected: {"quantity", "s4", "s6",
+    # "method", "reason"}
+    reconciliation: list = field(default_factory=list)
+    # independent carrier cross-check (report §10.5 item 3)
+    carrier_line_norm: Optional[float] = None
+    carrier_line_quality: Optional[float] = None
+
+    def set_estimate(self, name: str, est) -> None:
+        """Record an Estimate under ``name`` in both the new ``estimates``
+        map and the legacy ``confidences`` map."""
+        self.estimates[name] = est.to_dict()
+        self.confidences[name] = est.to_confidence_dict()
+
+    def estimate_state(self, name: str) -> str:
+        return (self.estimates.get(name) or {}).get("state", "valid")
 
     def to_dict(self) -> dict:
         d = dataclasses.asdict(self)
         return d
+
+
+@dataclass
+class TrialRank:
+    """One row of the receiver-trial ranking table (report §8.3).
+
+    Every candidate the classifier considered appears here, including the
+    ones that were never trialled - those carry ``measured=False`` so an
+    analyst can tell "tested and rejected" from "never tested", which is
+    exactly the distinction the IQ-02 misclassification hid.
+    """
+    candidate: str
+    prior: float = 0.0            # fused-prior probability before trials
+    measured: bool = False        # was the real S6 receiver actually run?
+    score: Optional[float] = None  # trial score; None = did not lock
+    evm_percent: Optional[float] = None
+    gate_good: Optional[float] = None
+    gate_ratio: Optional[float] = None   # evm / gate_good; < 1 is a clean lock
+    occupancy: Optional[float] = None
+    structure: Optional[float] = None
+    status: str = "not measured"   # GOOD | DEGRADED | FAILED | not measured
+    samples_per_symbol: Optional[float] = None
+    family: str = ""
+    metrics: dict = field(default_factory=dict)   # family-specific extras
+    reason: str = ""               # why it did not lock / was not measured
+
+    def to_dict(self) -> dict:
+        return dataclasses.asdict(self)
 
 
 @dataclass
@@ -216,9 +369,19 @@ class ModulationHypothesis:
     classifier_agreement: bool = True
     constraints_applied: list = field(default_factory=list)
     in_distribution: bool = True
+    # --- receiver-trial evidence (report §8) ----------------------------
+    trial_ranking: list = field(default_factory=list)   # list[TrialRank]
+    prior_winner: Optional[str] = None      # top of the fused prior
+    trial_winner: Optional[str] = None      # top of the receiver trial
+    trial_disagreement: bool = False        # prior and trial disagree
+    trials_run: int = 0
+    trial_mode: str = "shortlist"           # shortlist | escalated | all
 
     def to_dict(self) -> dict:
-        return dataclasses.asdict(self)
+        d = dataclasses.asdict(self)
+        d["trial_ranking"] = [r.to_dict() if hasattr(r, "to_dict") else r
+                              for r in self.trial_ranking]
+        return d
 
 
 @dataclass
@@ -237,6 +400,12 @@ class DemodulationResult:
     eye_trace: np.ndarray = field(default=None, repr=False)
     audio: np.ndarray = field(default=None, repr=False)
     demodulation_status: str = "FAILED"      # GOOD | DEGRADED | FAILED
+    # --- values the receiver recovered itself, for S4 reconciliation ----
+    # (report §11 item 7: WAV-03's GMSK demodulator found the right symbol
+    # rate internally while S4's published figure stayed 74% wrong)
+    cfo_confident: bool = False        # cfo_applied_norm is a measurement
+    symbol_rate_norm_recovered: Optional[float] = None
+    symbol_rate_confident: bool = False
 
     def to_dict(self) -> dict:
         return {"modulation": self.modulation,
@@ -247,6 +416,9 @@ class DemodulationResult:
                 "carrier_locked": self.carrier_locked,
                 "timing_locked": self.timing_locked,
                 "cfo_applied_norm": self.cfo_applied_norm,
+                "cfo_confident": self.cfo_confident,
+                "symbol_rate_norm_recovered": self.symbol_rate_norm_recovered,
+                "symbol_rate_confident": self.symbol_rate_confident,
                 "samples_per_symbol": self.samples_per_symbol,
                 "lock_metrics": self.lock_metrics, "warnings": self.warnings}
 
@@ -380,6 +552,11 @@ class AnalysisResult:
     conditioning: Optional[ConditioningReport] = None
     segments: list = field(default_factory=list)
     selected_segment: Optional[dict] = None
+    # how S2 arrived at that list: which analysis resolution and noise
+    # model won, what the carrier cross-check said, what it warned about
+    detection: dict = field(default_factory=dict)
+    # one entry per segment S3-S6 was tried on, in the order tried
+    segment_attempts: list = field(default_factory=list)
     parameters: Optional[SignalParameters] = None
     modulation: Optional[ModulationHypothesis] = None
     demodulation: Optional[dict] = None
@@ -389,6 +566,9 @@ class AnalysisResult:
     frames: Optional[FrameHypothesis] = None
     payload: Optional[Payload] = None
     payload_intelligence: Optional[dict] = None
+    # known-pattern correlation, when the analyst supplied a preamble:
+    # {"pattern": ..., "streams": {name: result}, "best": name}
+    correlation: Optional[dict] = None
     hypotheses: list = field(default_factory=list)
     stage_timings: dict = field(default_factory=dict)
     pipeline_trace: list = field(default_factory=list)
@@ -406,6 +586,8 @@ class AnalysisResult:
             "conditioning": None if self.conditioning is None else dataclasses.asdict(self.conditioning),
             "segments": [s.to_dict() if hasattr(s, "to_dict") else s for s in self.segments],
             "selected_segment": self.selected_segment,
+            "detection": self.detection,
+            "segment_attempts": self.segment_attempts,
             "parameters": opt(self.parameters),
             "modulation": opt(self.modulation),
             "demodulation": self.demodulation,
@@ -415,6 +597,7 @@ class AnalysisResult:
             "frames": opt(self.frames),
             "payload": opt(self.payload),
             "payload_intelligence": self.payload_intelligence,
+            "correlation": self.correlation,
             "hypotheses": [h.to_dict() for h in self.hypotheses],
             "stage_timings": {k: round(v, 3) for k, v in self.stage_timings.items()},
             "pipeline_trace": self.pipeline_trace,

@@ -7,11 +7,11 @@ interpretation:
 ```
 recording (.iq / .wav)
   -> format sniffing        (S0)
-  -> conditioning           (S1)
-  -> CFAR signal detection  (S2)
-  -> channelisation         (S3)
-  -> parameter estimation   (S4)
-  -> modulation ID          (S5, two engines + fusion)
+  -> conditioning           (S1, analytic conversion for real inputs)
+  -> signal detection       (S2, multi-resolution -> RANKED segments)
+  -> channelisation         (S3, channel filter + burst trim)
+  -> parameter estimation   (S4, every value carries a validity state)
+  -> modulation ID          (S5, engines + fusion + receiver trials)
   -> demodulation           (S6, soft bits / LLRs)
   -> ambiguity fan-out      (S7)
   -> blind descrambling     (S7)
@@ -21,11 +21,16 @@ recording (.iq / .wav)
   -> report + exports       (S11)
 ```
 
-The architecture is not a linear pipeline: stages S7-S10 run inside a
+The architecture is not a linear pipeline. Stages S7-S10 run inside a
 hypothesis search with beam pruning, objective evidence scoring (GF(2)
 rank deficiency, FEC syndrome-zero rate, CRC pass rate) and early exit on
-a validated chain. Every reported number carries a confidence and the
-method that produced it; unknown things are reported as unknown.
+a validated chain. The front end is a search too: S2 emits a ranked
+segment list found by searching over analysis resolution, noise-floor
+model and grouping scale, and S3-S6 walk down that list rather than
+committing to the first box. Every reported number carries a confidence,
+the method that produced it, and a validity state that says whether it is
+a measurement, a bound, or nothing at all; unknown things are reported as
+unknown.
 
 ## What it recovers, verified end to end
 
@@ -34,7 +39,16 @@ convolutional code (K=7, generators 171/133 octal), an 8x16 block
 interleaver, PN9 whitening, 96-bit frames with a sync word and
 CRC-16/CCITT, plus AWGN, carrier offset and phase offset, writes it to a
 raw `.iq` file, and the analyzer blindly recovers every element of that
-chain including the payload, in under 10 seconds.
+chain including the payload.
+
+On real signals, `SelfRun/ao73.wav` is a 5.6 s, 48 kHz mono recording of
+AO-73 (FUNcube-1) - a 1200 baud DBPSK carrier at about 1102 Hz inside an
+audio-band capture. Blind, the analyzer isolates the carrier, measures
+1202 baud against a published 1200, classifies it as BPSK, and its FEC
+identifier recovers the CCSDS r=1/2 K=7 convolutional code (generators
+171/133 octal) with a syndrome-zero rate of 0.82. The published ground
+truth is checked in `tests/test_real_recording.py` and by
+`scripts/validate_matrix.py --suite real`.
 
 ## Installation
 
@@ -127,10 +141,20 @@ rendered in the browser with no upload.
 ## Tests and benchmarks
 
 ```bash
-pytest                            # 53 unit/integration/end-to-end tests
+pytest                            # everything (tens of minutes)
+pytest -m "not slow"              # every stage, minus the full-pipeline
+                                  # cases: a couple of minutes
 python scripts/benchmark.py --big # performance table below
-python scripts/validate_matrix.py # ground-truth matrix, all modulations
+python scripts/validate_matrix.py # ground-truth matrix, all suites
+python scripts/validate_matrix.py --suite real   # AO-73, published truth
 node web/test-node.js             # browser engine regression (4 cases)
+```
+
+CI (`.github/workflows/ci.yml`) runs the suite on Python 3.11 and 3.12
+for every push and pull request, and the ground-truth matrix plus the
+real-recording case on `main`.
+
+```bash
 ```
 
 Measured on an Apple M5 (10 cores), all report targets are met:
@@ -152,60 +176,144 @@ synchronisation and a mandatory quality gate
 (`demodulation_status = GOOD | DEGRADED | FAILED`); a FAILED demodulation
 stops the pipeline instead of feeding the bit layer unreliable bits.
 
+Two things every receiver does that are easy to get wrong. The
+**amplitude scale is measured, not assumed**: a unit-power AGC assumes
+every constellation point is used equally often, and framed traffic is
+off by +5.8% for 256QAM and -5.2% for 128APSK, which is harmless for
+QPSK and decisive for a dense grid. And **feedforward corrections are
+normalised by the taps that actually contributed**, because a fixed
+1/window scaling smears anything at a record's edge back over half a
+window of good symbols - six noise samples at a burst tail moved 32PSK
+from 1.1% to 7.6% EVM.
+
 | family | modulations | carrier strategy |
 |--------|-------------|------------------|
 | PSK    | BPSK, QPSK, 8PSK, 16PSK, 32PSK | DD-PLL (<=8), slip-free V&V feedforward (>=16) |
 | OQPSK  | OQPSK | x^4 carrier first, x^2 line-pair rate, dual stagger trial |
 | ASK    | OOK, 4ASK, 8ASK | 2nd-moment axis alignment + slow PLL |
-| QAM    | 16/32/64/128/256-QAM | symbol-domain CFO + phase grid + slow polish (no loops on dense QAM) |
-| APSK   | 16/32/64/128-APSK | ring-gated V&V + symmetry-aware coset snap |
-| CPM    | 2FSK, 4FSK, GMSK | discriminator; GMSK rate/carrier from x^2 squaring lines |
+| QAM    | 16/32/64/128/256-QAM | symbol-domain CFO, decision-directed frequency tracking up a block ladder, joint lattice phase/scale lock, slow polish (no feedback loops on dense QAM) |
+| APSK   | 16/32/64/128-APSK | frequency track, ring-gated V&V, symmetry-aware coset snap |
+| CPM    | 2FSK, 4FSK, GMSK | discriminator; GMSK rate/carrier from x^2 squaring lines; coarse carrier from the spectral centroid |
 | OFDM   | detected + parameterised (N_FFT, CP), multi-evidence, not demodulated |
 | analog | AM-DSB-WC/SC, AM-SSB-WC/SC, FM | envelope / coherent / discriminator + audio LPF; audio out, no bit layer |
 
-`scripts/validate_matrix.py` measures every modulation against ground
-truth (blind classification, known-modulation BER, full blind chain with
-frames/CRC/payload trust) and writes `docs/validation_report.json` with a
-PASS/DEGRADED/FAIL verdict per case.
+`scripts/validate_matrix.py` measures the analyzer against ground truth
+and writes `docs/validation_report.json` with a PASS/DEGRADED/FAIL
+verdict per case. It runs five suites:
 
-Latest full run (49 cases: 27 modulations, two SNR points each for the
-digital set, full blind chain at the flagship SNR):
+| suite | what it varies | why |
+|---|---|---|
+| `core` | every modulation x two SNRs x several seeds | the regression backbone; several seeds because one gives no variance estimate |
+| `impairments` | phase noise, timing offset, clock ppm, IQ imbalance, multipath, DC offset | all six are implemented by the synthetic factory and none of them used to be exercised |
+| `sps` | 2.5, 4, 8, 20, 40 samples per symbol | covers the receiver's sub-3-sps path and audio-rate telemetry, which runs at 40 sps and above |
+| `bitlayer` | FEC x interleaver x scrambler combinations | no case used to enable any of them, so S7-S10 went unmeasured |
+| `real` | `SelfRun/ao73.wav` against published ground truth | the only real recording in the set |
+
+Three things it reports that a verdict alone cannot:
+
+- **Rank of truth.** Not just whether the top-1 answer was right, but
+  where the true modulation sat in the receiver-trial table and whether
+  it was measured at all. A truth that was never trialled is a different
+  failure from one that was trialled and lost.
+- **An unbiased BER.** The alignment is chosen on a prefix and the
+  disjoint remainder is scored with it, and the result carries a Wilson
+  interval. Searching alignment and keeping the minimum is a biased
+  estimator - it is how an 8.2% EVM came to be reported alongside a
+  0.000 BER.
+- **Es/N0 error against the derived truth**, per modulation, with the
+  spread across seeds. Only for linear modulations: Es/N0 is the
+  full-band SNR plus `10*log10(sps)` only when the occupied bandwidth is
+  one symbol rate, which is not true of M-FSK at modulation index 1 or of
+  OFDM, and quoting an "error" against that formula for those families
+  would be measuring the formula rather than the estimator.
+
+Latest core run (one SNR per modulation, 27 cases):
 
 ```text
-43 PASS, 3 DEGRADED, 3 FAIL
+27 PASS, 0 DEGRADED, 0 FAIL
 
-- all 21 digital modulations demodulate at BER 0.000-0.007 at their
-  family-appropriate SNR
-- blind classification names 26 of 27 modulations correctly at the
-  flagship SNR: S5 trial-demodulates its shortlist with the real S6
-  receiver and a candidate only wins if it LOCKS (EVM against its own
-  calibrated gate, constellation occupancy, residual-bias structure),
-  which eliminated the earlier name confusions among lookalike dense
-  constellations
-- 17 of 19 framed modulations complete the entire blind chain to a
-  CRC-validated payload (trust: VALIDATED PAYLOAD), and in 19 of 21
-  full-chain runs the extracted payload is byte-for-byte a contiguous
-  substring of the transmitted payload (the other 2 are the BER-limited
-  cases below, where the CRC gate correctly withholds trust)
-- the 3 DEGRADED are honesty, not errors: 128APSK at both SNRs decodes
-  at BER 0.000 but stays gated DEGRADED by its EVM margin, and 2FSK at
-  10 dB decodes at BER 0.000 with the classification withheld as
-  UNKNOWN rather than guessed
-- the 3 FAILs are physics at the SNR floor (256QAM at 31/37 dB with a
-  720-symbol burst, GMSK at 10 dB with BER 0.05), reported by the
-  quality gates rather than hidden
+- every digital modulation demodulates at BER 0.0000-0.0008
+- blind classification is correct for all 21 digital modulations, and the
+  five analog transmissions are correctly withheld as UNKNOWN rather than
+  given a digital name
+- rank-of-truth: top-1 95%, top-3 100%, worst rank 2
+- Es/N0 error over the linear families: -0.9 to -4.4 dB, largest for the
+  dense constellations whose shaping skirts the detector box truncates
 ```
+
+and the real recording, against published ground truth:
+
+```text
+ao73.wav -> PASS
+  segment      0 - 2250 Hz     (truth: ~2 kHz around 1102 Hz)
+  symbol rate  1202.1 Bd       (truth: 1200 Bd)
+  modulation   BPSK            (truth: DBPSK)
+  inner FEC    K=7, 171/133 octal, syndrome-zero rate 0.82
+               (truth: CCSDS r=1/2 K=7) - recovered blind, after a
+               differential decode and an 80x65 de-interleave
+```
+
+## Known-pattern correlation
+
+When the protocol's preamble is known, `--preamble` correlates it against
+every recovered bit stream and reports where it is, how well it matches,
+and what lies between occurrences:
+
+```bash
+rf-analyzer analyze capture.wav --preamble "A6 3C 91"
+```
+
+```text
+preamble 'A6 3C 91' correlation:
+  >> FEC-decoded bits (S9): 60 hit(s) as 'differentially decoded', period 200 bits
+       offset 0 bits (byte 0), score 1.000 (24/24), p=1.19e-04
+       payload bits 24..200 (176 bits, byte aligned)
+```
+
+Three things make this more than a substring search:
+
+- **The physical layer's ambiguities are searched, and the one that
+  matched is named.** A BPSK stream can be inverted and a differentially
+  encoded one read either way; the analyst should not have to try each by
+  hand, but should be told which reading contained the pattern.
+- **Every hit carries a p-value** - the chance that a random stream of
+  the same length would contain a match at least that good anywhere. A
+  24-bit pattern in a megabit stream cannot clear that bar, and the tool
+  says so rather than returning the best of a million alignments.
+- **Repeated hits give the frame period and the payload range**, which is
+  the actual deliverable.
+
+Every stage's bits are searched, not just the last. Finding the preamble
+after de-interleaving and FEC decoding but *not* before is itself
+evidence that those hypotheses were right.
 
 ## Evidence gates and trust
 
-The pipeline is evidence-driven: S5 only names a constellation that
-locks in a real receiver trial (EVM against the candidate's own gate,
-point occupancy, residual-bias structure) and withholds the claim as
-UNKNOWN when nothing locks; S6 gates on EVM/locks/rotational
+The pipeline is evidence-driven: S5 only names a modulation that locks in
+a real receiver trial - linear families scored on EVM against the
+candidate's own calibrated gate, point occupancy and residual-bias
+structure; continuous-phase families on tone fit or modulation-index
+consistency, gated on the constant-envelope test - and withholds the
+claim as UNKNOWN when nothing locks. S6 gates on EVM/locks/rotational
 concentration; S10 accepts a frame only with a CRC pass or a sync word
 plus cross-frame stability (rejections are reported with their evidence);
 S11 grades its input VALIDATED / PROBABLE / SPECULATIVE from the CRC, FEC
 and demodulation provenance and caps every finding accordingly.
+
+Three things are reported that a verdict alone cannot express:
+
+- **Validity state on every measurement.** An S4 estimate is `valid`,
+  `saturated` (the number is a lower bound, not a value) or
+  `unresolvable` (the observable is absent). SNR is published as Es/N0,
+  the quantity EVM measures and BER depends on.
+- **The full receiver-trial ranking**, including candidates that were
+  never trialled, marked `not measured`. "Tested and rejected" and
+  "never tested" are different statements; `--rank-all` measures every
+  candidate. The fused-prior winner and the trial winner are both named
+  and a disagreement is flagged.
+- **Every segment that was tried.** S2 emits a ranked segment list and
+  S3-S6 walk down it; `segment_attempts` records each one with what it
+  yielded.
 
 ## S11 payload intelligence
 
@@ -232,10 +340,18 @@ pipeline flow recorded by the engine.
   (fundamental to rank-based methods); improve demodulation first.
 - Blind classification of dense constellations near their SNR floor can
   report a lookalike neighbour as a close second (256QAM vs 128QAM at a
-  matched EVM); the receiver-trial detail in the report shows both locks
+  matched EVM); the receiver-trial ranking in the report shows every
+  candidate that was measured, its score and why the others were not,
   and the analyst override recovers the full chain in those cases.
-- 128APSK carrier-coset resolution and 256QAM near their SNR floors gate
-  DEGRADED with an explicit ambiguity warning instead of guessing.
+- 128QAM has no usable fourth moment (E[table^4] is 0.18 against 0.68
+  for 16QAM) and 128APSK's is exactly zero, so neither offers a carrier
+  line for the symbol-domain estimator. They are carried by the
+  decision-directed frequency tracker instead, which needs the scale to
+  be right first; when it is not, the EVM gate marks them FAILED rather
+  than passing bits the bit layer cannot use.
+- A signal that fills its whole band leaves no noise-only region, so the
+  spectral SNR estimator reports `unresolvable` and the moment estimator
+  takes over with its own kurtosis assumption stated.
 - LDPC identification uses candidate-set matching (known H matrices,
   deterministic seeds or loaded standards); reconstruction of an
   arbitrary unknown H remains out of scope and is stated in the result.

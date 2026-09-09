@@ -91,6 +91,39 @@ def _spectral_structure(x: np.ndarray) -> float:
     return float(np.clip((crest - 13.0) / 25.0, 0.0, 1.0))
 
 
+def _sample_continuity(x: np.ndarray) -> float:
+    """0..1: how smooth the sample sequence is.
+
+    An oversampled RF recording is a band-limited waveform, so successive
+    samples are strongly correlated and |x[n] - x[n-1]| is much smaller
+    than the sample spread.  Reading the same bytes with the WRONG dtype
+    or endianness shuffles bytes between samples and destroys that
+    correlation, giving an essentially white sequence.
+
+    This matters because the spectral-structure test alone can be fooled
+    in the opposite direction: a wrong reading imposes a periodic
+    byte-stride pattern, which shows up as strong spectral lines and
+    therefore as "structure".  Continuity has no such failure mode - a
+    misread cannot invent correlation it destroyed - so the two tests
+    together are far harder to fool than either alone.
+
+    A Nyquist-rate recording is legitimately less smooth, so this is one
+    term of the evidence rather than a gate.
+    """
+    n = min(len(x), 65536)
+    if n < 64:
+        return 0.0
+    v = np.asarray(x[:n], dtype=np.complex128)
+    spread = float(np.sqrt((np.abs(v - v.mean()) ** 2).mean()))
+    if spread <= 0:
+        return 0.0
+    step = float(np.abs(np.diff(v)).mean())
+    # an uncorrelated sequence gives a mean step of about
+    # sqrt(2 * E|x - mean|^2) * (a shape factor near 0.9); 1.2 * spread is
+    # a safe stand-in for "no correlation at all"
+    return float(np.clip(1.0 - step / (1.2 * spread), 0.0, 1.0))
+
+
 def sniff_raw_iq(path: str) -> list:
     """Return ranked candidate interpretations:
     [{dtype, endian, complex, confidence, explanation}, ...]"""
@@ -123,22 +156,49 @@ def sniff_raw_iq(path: str) -> list:
                 cplx = v[0:n2:2] + 1j * v[1:n2:2]
             sym = _spectral_symmetry(cplx)
             structure = _spectral_structure(cplx)
+            continuity = _sample_continuity(cplx)
+            # Structure and continuity fail in opposite directions, so the
+            # evidence takes both: a misread shows lines it did not earn
+            # (structure high) but cannot show correlation it destroyed
+            # (continuity low), and a genuinely wideband signal is the
+            # other way round.
+            evidence = hscore * (0.2 + 0.4 * structure + 0.4 * continuity)
             results.append({
                 "dtype": name, "endian": endian, "complex": True,
                 "histogram_score": round(hscore, 3),
                 "spectral_symmetry": round(sym, 3),
                 "spectral_structure": round(structure, 3),
-                "confidence": round(hscore * (0.35 + 0.65 * structure), 3),
+                "sample_continuity": round(continuity, 3),
+                # raw evidence for this reading; the posterior over
+                # readings is computed once every candidate is known
+                "evidence": round(evidence, 3),
+                "confidence": round(evidence, 3),
                 "explanation": f"{name} {endian}-endian interleaved IQ: "
                                f"histogram {hscore:.2f}, spectral structure "
-                               f"{structure:.2f}, symmetry {sym:.2f}",
+                               f"{structure:.2f}, sample continuity "
+                               f"{continuity:.2f}, symmetry {sym:.2f}",
             })
-    results.sort(key=lambda r: -r["confidence"])
+    results.sort(key=lambda r: -r["evidence"])
     if results:
-        # normalise confidences to a distribution-ish scale
-        top = results[0]["confidence"] or 1.0
-        rel = [r["confidence"] for r in results]
-        s = sum(rel) or 1.0
-        for r in results:
-            r["confidence"] = round(r["confidence"] / s, 3)
+        # Confidence is about SEPARATION, not share.  Dividing each
+        # candidate's evidence by the sum over all candidates made the
+        # winner's confidence a function of how many candidates the file
+        # size happened to admit, so a correct and unambiguous
+        # interpretation still reported 0.21-0.23 (report §7.3).  A
+        # power-law posterior answers the question actually being asked -
+        # how much better is the best reading than the next one - and
+        # still splits the mass evenly when two readings really are
+        # equally good.
+        k = 4.0
+        weights = [max(r["evidence"], 1e-6) ** k for r in results]
+        total = sum(weights) or 1.0
+        for r, w in zip(results, weights):
+            r["confidence"] = round(w / total, 3)
+        best = results[0]["evidence"]
+        runner = results[1]["evidence"] if len(results) > 1 else 0.0
+        results[0]["margin_over_runner_up"] = round(
+            best - runner, 3)
+        results[0]["explanation"] += (
+            f"; {best - runner:+.2f} evidence over the next reading"
+            if len(results) > 1 else "; the only plausible reading")
     return results

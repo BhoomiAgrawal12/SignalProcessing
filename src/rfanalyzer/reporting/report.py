@@ -18,21 +18,69 @@ def _rows_for_csv(r: dict) -> list:
     for k in ("file_path", "format", "sample_rate", "sample_rate_source",
               "center_frequency", "datatype", "n_samples", "duration_s"):
         rows.append((f"recording.{k}", rec.get(k), "", ""))
+    det = r.get("detection") or {}
+    if det:
+        rows.append(("detection.analysis_resolution_bins",
+                     det.get("chosen_resolution"), "",
+                     det.get("chosen_noise_model", "")))
+        cross = det.get("carrier_cross_check") or {}
+        if cross.get("carrier_norm") is not None:
+            rows.append(("detection.x2_carrier_norm", cross["carrier_norm"],
+                         cross.get("quality", ""),
+                         "independent carrier cross-check"))
+    for att in (r.get("segment_attempts") or []):
+        rows.append((f"segment_attempt.{att.get('attempt')}",
+                     att.get("modulation"), att.get("accepted"),
+                     f"segment {att.get('segment_id')}, "
+                     f"demod {att.get('demodulation_status')}"))
     p = r.get("parameters") or {}
     conf = p.get("confidences", {})
+    ests = p.get("estimates", {})
+
     def c(name):
         d = conf.get(name, {})
-        return d.get("value", ""), d.get("method", "")
+        # the validity state travels with every value: a saturated SNR is
+        # a bound, not a measurement, and a CSV reader must be able to
+        # tell the difference
+        state = (ests.get(name) or {}).get("state") or d.get("state", "")
+        method = d.get("method", "")
+        if state and state != "valid":
+            method = f"{method} [{state}]"
+        return d.get("value", ""), method
     for key, cname in [("obw99_norm", "obw"), ("carrier_offset_norm", "cfo"),
-                       ("snr_db", "snr"), ("symbol_rate_norm", "symbol_rate"),
+                       ("snr_db", "snr"), ("snr_full_band_db", "snr"),
+                       ("symbol_rate_norm", "symbol_rate"),
                        ("samples_per_symbol", "symbol_rate"),
                        ("symbol_rate_hz", "symbol_rate"),
-                       ("excess_bandwidth", "obw")]:
+                       ("excess_bandwidth", "excess_bandwidth")]:
         v, m = c(cname)
         rows.append((f"parameters.{key}", p.get(key), v, m))
+    for note in (p.get("reconciliation") or []):
+        rows.append((f"parameters.reconciled.{note.get('quantity')}",
+                     note.get("s6"), note.get("s4"),
+                     note.get("reason", "")))
     m = r.get("modulation") or {}
     rows.append(("modulation.prediction", m.get("prediction"),
-                 m.get("confidence"), "fusion of engines"))
+                 m.get("confidence"), "receiver-trial arbitration"))
+    if m.get("prior_winner"):
+        rows.append(("modulation.prior_winner", m.get("prior_winner"), "",
+                     "fused prior before any receiver ran"))
+    if m.get("trial_winner"):
+        rows.append(("modulation.trial_winner", m.get("trial_winner"),
+                     m.get("trials_run"),
+                     ("PRIOR AND TRIAL DISAGREE" if m.get("trial_disagreement")
+                      else m.get("trial_mode", ""))))
+    for rank, row in enumerate((m.get("trial_ranking") or []), 1):
+        if not row.get("measured"):
+            rows.append((f"modulation.trial.{rank}.{row.get('candidate')}",
+                         "not measured", row.get("prior"),
+                         row.get("reason", "")))
+            continue
+        rows.append((f"modulation.trial.{rank}.{row.get('candidate')}",
+                     row.get("score"), row.get("prior"),
+                     f"EVM {row.get('evm_percent')}% vs gate "
+                     f"{row.get('gate_good')}, occupancy "
+                     f"{row.get('occupancy')}, {row.get('status')}"))
     for eng, pred in (m.get("engine_predictions") or {}).items():
         if isinstance(pred, list):
             rows.append((f"modulation.engine.{eng}", pred[0], pred[1], ""))

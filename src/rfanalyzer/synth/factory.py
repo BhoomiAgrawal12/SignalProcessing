@@ -77,6 +77,28 @@ class WaveformFactory:
                       "crc": "CRC-16-CCITT-FALSE", "payload_len": payload_len}
         return bits, frame_meta, payloads
 
+    @staticmethod
+    def _spec(d, *keys, default="none"):
+        """Read a component spec that may name its type under any of
+        ``keys``.
+
+        Report §6: FEC specs use ``family`` while interleaver and
+        scrambler specs use ``kind``, so passing the wrong one raised
+        ``KeyError: 'kind'`` from inside the factory.  Both spellings are
+        accepted now and the canonical key is filled in, because an API
+        that raises on a synonym is a trap for exactly the kind of
+        scripted sweep the validation harness needs to run.
+        """
+        d = dict(d or {})
+        value = default
+        for k in keys:
+            if d.get(k):
+                value = d[k]
+                break
+        for k in keys:
+            d[k] = value
+        return d, value
+
     # ---------------- full stack ------------------------------------------
     def generate(self, modulation: str = "QPSK", sps: float = 8.0,
                  rolloff: float = 0.35, snr_db: float = 30.0,
@@ -98,16 +120,16 @@ class WaveformFactory:
 
         bits = info_bits
         # FEC
-        fec = fec or {"family": "none"}
+        fec, fec_family = self._spec(fec, "family", "kind")
         gt.fec = dict(fec)
-        if fec["family"] == "convolutional":
+        if fec_family == "convolutional":
             code = ConvCode(fec.get("K", 7),
                             tuple(fec.get("generators", (0o171, 0o133))))
             bits = conv_encode(bits, code, terminate=False)
             gt.fec.update({"K": code.K,
                            "generators_octal": [oct(g) for g in code.generators],
                            "rate": "1/2"})
-        elif fec["family"] == "ldpc":
+        elif fec_family == "ldpc":
             from .. import fec as _fecpkg
             from ..fec.ldpc import LDPCCode
             code = LDPCCode(fec.get("n", 256), fec.get("k", 128),
@@ -115,7 +137,7 @@ class WaveformFactory:
             bits = code.encode(bits)
             gt.fec.update({"n": code.n, "k": code.k, "seed": code.seed,
                            "rate": f"{code.k}/{code.n}"})
-        elif fec["family"] == "reed_solomon":
+        elif fec_family == "reed_solomon":
             rs = RSCode(fec.get("n", 255), fec.get("k", 223),
                         fcr=fec.get("fcr", 1), generator=fec.get("generator", 2))
             data = np.packbits(bits)
@@ -128,24 +150,24 @@ class WaveformFactory:
         gt.coded_bits_len = len(bits)
 
         # interleave
-        interleaver = interleaver or {"kind": "none"}
+        interleaver, il_kind = self._spec(interleaver, "kind", "family")
         gt.interleaver = dict(interleaver)
-        if interleaver["kind"] == "block":
+        if il_kind == "block":
             bits = block_interleave(bits, interleaver["rows"], interleaver["cols"])
-        elif interleaver["kind"] == "convolutional":
+        elif il_kind == "convolutional":
             bits = conv_interleave(bits, interleaver["branches"], interleaver["delay"])
-        elif interleaver["kind"] == "helical":
+        elif il_kind == "helical":
             bits = helical_interleave(bits, interleaver["rows"],
                                       interleaver["cols"], interleaver["step"])
-        elif interleaver["kind"] == "pseudo_random":
+        elif il_kind == "pseudo_random":
             perm = self.rng.permutation(interleaver.get("period", 128))
             bits = pn_interleave(bits, perm)
             gt.interleaver["permutation"] = perm.tolist()
 
         # scramble
-        scrambler = scrambler or {"kind": "none"}
+        scrambler, scr_kind = self._spec(scrambler, "kind", "family")
         gt.scrambler = dict(scrambler)
-        if scrambler["kind"] == "known_whitening":
+        if scr_kind == "known_whitening":
             w = KNOWN_WHITENERS[scrambler["name"]]
             bits = additive_scramble(bits, w["poly"], w["seed"])
             gt.scrambler.update(w)
@@ -175,7 +197,6 @@ class WaveformFactory:
             gt.fsk_deviation_norm = 0.25 / sps * 2
         elif modulation == "OFDM":
             iq = self._ofdm(bits, n_fft=64, cp=16)
-            gt.fec = dict(fec)
             gt.frame["note"] = "OFDM: QPSK subcarriers, N_FFT 64, CP 16"
         elif modulation in ("FM", "AM-DSB-WC", "AM-DSB-SC",
                             "AM-SSB-WC", "AM-SSB-SC"):

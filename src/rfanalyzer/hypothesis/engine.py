@@ -69,6 +69,8 @@ def bitlayer_search(streams: list, config, fec_config, framing_config,
     deficiency at P, then run interleaver ID -> FEC ID -> framing -> CRC.
     Returns {"best": {...}, "hypotheses": [AnalysisHypothesis...]}.
     """
+    _sig_words = list(getattr(framing_config, "signature_sync_words", [])
+                      or [])
     from ..scrambling.berlekamp import align_whitener
     from ..scrambling.lfsr import KNOWN_WHITENERS
 
@@ -177,14 +179,14 @@ def bitlayer_search(streams: list, config, fec_config, framing_config,
                     if not frame_cands:
                         continue
                     fl = frame_cands[0]["length"]
-                    fr = analyze_frames(pol_bits, fl)
+                    fr = analyze_frames(pol_bits, fl, _sig_words)
                     # re-stack so the frame starts at the sync word: the
                     # decoded stream begins at an arbitrary point inside a
                     # frame and the CRC hunter anchors to the frame end
                     sync = fr["sync"]
                     if sync.get("found") and sync["offset_bits"] > 0:
                         pol_bits = pol_bits[sync["offset_bits"]:]
-                        fr = analyze_frames(pol_bits, fl)
+                        fr = analyze_frames(pol_bits, fl, _sig_words)
                     hits = crc_hunt(fr["frames"], framing_config.crc_candidates) \
                         if fl % 8 == 0 else []
                     # the longest-constant-run sync heuristic can anchor on
@@ -196,7 +198,7 @@ def bitlayer_search(streams: list, config, fec_config, framing_config,
                             cand_bits = pol_bits[shift * 8:]
                             if len(cand_bits) < 4 * fl:
                                 break
-                            fr2 = analyze_frames(cand_bits, fl)
+                            fr2 = analyze_frames(cand_bits, fl, _sig_words)
                             h2 = crc_hunt(fr2["frames"],
                                           framing_config.crc_candidates)
                             if h2:
@@ -231,7 +233,7 @@ def bitlayer_search(streams: list, config, fec_config, framing_config,
                             cand_bits = pol_bits[anchor:]
                             if len(cand_bits) < 4 * fl:
                                 continue
-                            fr2 = analyze_frames(cand_bits, fl)
+                            fr2 = analyze_frames(cand_bits, fl, _sig_words)
                             h2 = crc_hunt(fr2["frames"],
                                           framing_config.crc_candidates)
                             if h2:

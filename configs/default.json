@@ -2,16 +2,36 @@
   "cfar": {
     "threshold_db": 8.0,
     "nfft": 4096,
-    "min_bandwidth_bins": 3,
+    "min_bandwidth_bins": 8,
     "min_duration_frames": 2,
-    "max_signals": 64
+    "max_signals": 64,
+    "merge_gap_ratios": [
+      0.15,
+      1.0,
+      4.0
+    ],
+    "skirt_power_ratio": 0.02,
+    "max_segment_retries": 3
   },
   "modulation": {
-    "classes": ["BPSK", "QPSK", "8PSK", "16QAM", "64QAM", "2FSK", "4FSK", "OOK"],
+    "classes": [
+      "BPSK",
+      "QPSK",
+      "8PSK",
+      "16QAM",
+      "64QAM",
+      "2FSK",
+      "4FSK",
+      "OOK"
+    ],
     "cvnet_enabled": true,
     "cvnet_variant": "real",
     "device": "auto",
-    "fusion_weights": {"cumulant": 0.5, "cvnet": 0.35}
+    "fusion_weights": {
+      "cumulant": 0.5,
+      "cvnet": 0.35
+    },
+    "rank_all": false
   },
   "demod": {
     "target_sps": 4.0,
@@ -24,5 +44,14 @@
     "rank_scan_max_bits": 200000,
     "deficiency_significance": 3.0
   },
-  "log_level": "INFO"
+  "log_level": "INFO",
+  "params": {
+    "obw_fraction": 0.99,
+    "symbol_rate_min_norm": 0.0001,
+    "symbol_rate_candidates": 8,
+    "symbol_rate_obw_guard": 0.2
+  },
+  "framing": {
+    "signature_sync_words": []
+  }
 }

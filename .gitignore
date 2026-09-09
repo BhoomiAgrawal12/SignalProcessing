@@ -14,3 +14,5 @@ ml/cvnet_rf/upstream/.cache/
 examples/demo_result.json
 examples/demo_signal.iq
 examples/webtest/
+PROJECT_OVERVIEW.md
+EVIDENCE.md

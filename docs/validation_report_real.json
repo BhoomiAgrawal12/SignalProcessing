@@ -1,0 +1,117 @@
+{
+  "summary": {
+    "total": 1,
+    "pass": 1,
+    "degraded": 0,
+    "fail": 0,
+    "skipped": 0,
+    "per_case": {
+      "BPSK": {
+        "n": 1,
+        "pass": 1,
+        "verdicts": [
+          "PASS"
+        ]
+      }
+    },
+    "by_suite": {
+      "real": {
+        "total": 1,
+        "pass": 1
+      }
+    }
+  },
+  "cases": [
+    {
+      "suite": "real",
+      "name": "ao73.wav",
+      "modulation": "BPSK",
+      "ground_truth": {
+        "sample_rate": 48000.0,
+        "modulation": "BPSK",
+        "symbol_rate_hz": 1200.0,
+        "carrier_hz": 1102.0,
+        "occupied_bandwidth_hz": 2000.0,
+        "fec": "convolutional r=1/2 k=7 (171/133 octal), outer RS(160,128)",
+        "scrambler": "CCSDS synchronous (applied before the inner code)",
+        "interleaver": "80 x 65 bit block = 5200 bits",
+        "frame_bits": 5200,
+        "source": "Karn, 'A Proposal for a Coded AO-40 Telemetry Format'; AMSAT AO-73 mission page; Signal Identification Wiki"
+      },
+      "segment_hz": [
+        0.0,
+        2250.0
+      ],
+      "segment_bandwidth_hz": 2250.0,
+      "carrier_hz": 1125.0,
+      "x2_carrier_hz": 601.0,
+      "symbol_rate_hz": 1202.1,
+      "samples_per_symbol": 14.97,
+      "classified": "BPSK",
+      "esn0_db": 11.5,
+      "snr_state": "valid",
+      "symbol_rate_ok": true,
+      "bandwidth_ok": true,
+      "carrier_in_segment": true,
+      "reached_bit_layer": true,
+      "demod_status": "DEGRADED",
+      "evm_percent": 43.5,
+      "n_bits": 5911,
+      "conv_code": {
+        "K": 7,
+        "g1": 121,
+        "g2": 91,
+        "offset": 0,
+        "syndrome_is_one": true,
+        "syndrome_zero_rate": 0.8202853837254146,
+        "stream": "differential",
+        "g1_octal": "0o171",
+        "g2_octal": "0o133"
+      },
+      "conv_code_correct": true,
+      "verdict": "PASS",
+      "elapsed_s": 36.3
+    }
+  ],
+  "configuration": {
+    "seeds": 3,
+    "quick": false,
+    "suites": [
+      "real"
+    ],
+    "impairments": {
+      "clean": {},
+      "phase_noise": {
+        "phase_noise_std": 0.004
+      },
+      "timing_offset": {
+        "timing_frac": 0.37
+      },
+      "clock_ppm": {
+        "clock_ppm": 25.0
+      },
+      "iq_imbalance": {
+        "iq_gain_db": 0.7,
+        "iq_phase_deg": 3.0
+      },
+      "multipath": {
+        "multipath_taps": [
+          1.0,
+          0.0,
+          0.0,
+          0.35
+        ]
+      },
+      "dc_offset": {
+        "dc_offset": "(0.05+0.03j)"
+      }
+    },
+    "sps_sweep": [
+      2.5,
+      4.0,
+      8.0,
+      20.0,
+      40.0
+    ]
+  }
+}
