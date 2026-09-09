@@ -22,6 +22,7 @@ def _run(tmp_path, config, gen_kwargs, sample_rate=1e6):
     return an.analyze(p, sample_rate=sample_rate), gt
 
 
+@pytest.mark.slow
 def test_e2e_full_stack_qpsk(tmp_path, config):
     """QPSK + conv FEC + block interleaver + PN9 + framed CRC payload."""
     res, gt = _run(tmp_path, config, dict(
@@ -46,6 +47,7 @@ def test_e2e_full_stack_qpsk(tmp_path, config):
     assert res.frames.crc["pass_fraction"] > 0.9
 
 
+@pytest.mark.slow
 def test_e2e_plain_bpsk(tmp_path, config):
     """Uncoded, unscrambled BPSK: verdicts must honestly be 'none'."""
     res, gt = _run(tmp_path, config, dict(
@@ -59,6 +61,7 @@ def test_e2e_plain_bpsk(tmp_path, config):
     assert res.frames.crc["pass_fraction"] > 0.9
 
 
+@pytest.mark.slow
 def test_e2e_2fsk(tmp_path, config):
     res, gt = _run(tmp_path, config, dict(
         modulation="2FSK", sps=8.0, snr_db=17.0, n_frames=80))
@@ -67,6 +70,7 @@ def test_e2e_2fsk(tmp_path, config):
     assert res.frames.frame_length_bits == 96
 
 
+@pytest.mark.slow
 def test_e2e_rs_coded(tmp_path, config):
     res, gt = _run(tmp_path, config, dict(
         modulation="QPSK", sps=8.0, snr_db=25.0, cfo_norm=0.003,

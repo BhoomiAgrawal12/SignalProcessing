@@ -65,6 +65,7 @@ def test_sigmf_roundtrip(tmp_path, signal):
     assert np.allclose(rec.samples[:1000], iq[:1000])
 
 
+@pytest.mark.slow
 def test_full_e2e_through_wav(tmp_path, config):
     """generate -> write WAV -> ingest -> S0-S11 -> payload recovered."""
     fac = WaveformFactory(seed=99)
@@ -86,6 +87,7 @@ def test_full_e2e_through_wav(tmp_path, config):
     assert res.payload_intelligence["provenance"]["crc_validated"]
 
 
+@pytest.mark.slow
 def test_e2e_ldpc(tmp_path, config):
     """LDPC-coded signal identified and decoded through the pipeline."""
     fac = WaveformFactory(seed=21)
