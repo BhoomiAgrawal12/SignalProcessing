@@ -6,6 +6,14 @@
 const $ = UI.$;
 let REPORT = null;
 
+// A saturated estimate is a lower bound, not a measurement; the viewer
+// has to say so or the number reads like the real thing.
+function snrState(d) {
+  const est = ((d.parameters || {}).estimates || {}).snr;
+  return (est && est.state) || (d.parameters || {}).snr_state || "valid";
+}
+
+
 /* ------------- load ------------- */
 (function setupDrop() {
   const drop = $("drop");
@@ -91,7 +99,8 @@ function renderOverview(d) {
             `${(p.symbol_rate_hz / 1e3).toFixed(2)} <small>kBd</small>` :
             `${p.symbol_rate_norm ?? "-"} <small>norm</small>`,
             p.samples_per_symbol ? `${p.samples_per_symbol} samples/symbol` : "") +
-    UI.tile("SNR", `${p.snr_db ?? "-"} <small>dB</small>`,
+    UI.tile(snrState(d) === "saturated" ? "Es/N0 (lower bound)" : "Es/N0",
+            `${snrState(d) === "saturated" ? "&ge; " : ""}${p.snr_db ?? "-"} <small>dB</small>`,
             ((d.parameters || {}).confidences || {}).snr ?
             UI.esc(d.parameters.confidences.snr.method) : "") +
     UI.tile("FEC", UI.esc(fec.family || "-"),
@@ -242,6 +251,21 @@ function renderDemodTab(d) {
         ds2 === "DEGRADED" ? "warn" : "bad") : "") +
     (m.classifier_agreement === false ? " " + UI.badge("ENGINES DISAGREE", "warn") : "");
   const rows = (m.alternatives || []).map((a) => ["fusion candidate", a[0], a[1]]);
+  if (m.prior_winner) rows.push(["fused-prior winner", m.prior_winner, ""]);
+  if (m.trial_winner) {
+    rows.push(["receiver-trial winner", m.trial_winner,
+               m.trial_disagreement ? "disagrees with the prior" : ""]);
+  }
+  // Every candidate the classifier considered, including the ones it
+  // never measured: "tested and rejected" and "never tested" are
+  // different statements about a classification.
+  (m.trial_ranking || []).forEach((t, i) => {
+    rows.push([`trial #${i + 1} ${t.candidate}`,
+               t.measured ? t.score : "not measured",
+               t.measured
+                 ? `EVM ${t.evm_percent ?? "-"}% / gate ${t.gate_good ?? "-"}, ${t.status}`
+                 : (t.reason || "")]);
+  });
   for (const [eng, pred] of Object.entries(m.engine_predictions || {}))
     rows.push(["engine " + eng, Array.isArray(pred) ? pred[0] : UI.esc(JSON.stringify(pred)),
                Array.isArray(pred) ? pred[1] : ""]);

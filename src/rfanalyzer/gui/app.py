@@ -429,11 +429,13 @@ class MainWindow(QMainWindow):
         for key in ("obw99_norm", "obw3db_norm", "carrier_offset_norm",
                     "snr_db", "symbol_rate_norm", "samples_per_symbol",
                     "symbol_rate_hz", "carrier_offset_hz", "obw99_hz",
-                    "excess_bandwidth", "fsk_tone_count",
+                    "snr_full_band_db", "excess_bandwidth", "fsk_tone_count",
                     "fsk_deviation_norm", "ofdm_detected"):
             cname = {"obw99_norm": "obw", "obw3db_norm": "obw",
                      "obw99_hz": "obw", "carrier_offset_norm": "cfo",
                      "carrier_offset_hz": "cfo", "snr_db": "snr",
+                     "snr_full_band_db": "snr",
+                     "excess_bandwidth": "excess_bandwidth",
                      "symbol_rate_norm": "symbol_rate",
                      "symbol_rate_hz": "symbol_rate",
                      "samples_per_symbol": "symbol_rate",
@@ -441,7 +443,14 @@ class MainWindow(QMainWindow):
                      "fsk_deviation_norm": "fsk",
                      "ofdm_detected": "ofdm"}.get(key, "")
             cd = conf.get(cname, {})
-            rows.append([key, p.get(key), cd.get("value"), cd.get("method")])
+            method = cd.get("method") or ""
+            # a saturated or unresolvable estimate is not a measurement,
+            # and the table has to say so next to the number
+            state = ((p.get("estimates", {}).get(cname) or {}).get("state")
+                     or cd.get("state") or "valid")
+            if state != "valid":
+                method = f"{method} [{state}]"
+            rows.append([key, p.get(key), cd.get("value"), method])
         _fill_table(self.tbl_params, rows,
                     ["parameter", "value", "confidence", "method"])
         # modulation
@@ -453,17 +462,43 @@ class MainWindow(QMainWindow):
             notes.append("WARNING: engines disagree - inspect before trusting")
         if not m.get("in_distribution", True):
             notes.append("signal may be outside the classifier training set")
+        if m.get("trial_disagreement"):
+            notes.insert(0, f"the fused prior favoured {m.get('prior_winner')} "
+                            f"but the receiver trial locked "
+                            f"{m.get('trial_winner')}")
         notes.extend(m.get("constraints_applied", []))
         self.lbl_mod_note.setText(" | ".join(str(n) for n in notes))
-        rows = [["fusion: " + str(l), f"{pr:.3f}", ""]
-                for l, pr in m.get("alternatives", [])]
+        # The receiver-trial ranking first: it is what decided the answer.
+        # Candidates that were never trialled are listed too, because
+        # "tested and rejected" and "never tested" are different
+        # statements about a classification.
+        rows = []
+        for i, t in enumerate(m.get("trial_ranking") or [], 1):
+            if not t.get("measured"):
+                rows.append([f"trial #{i} {t.get('candidate')}",
+                             "not measured",
+                             f"prior {t.get('prior', 0):.3f}"])
+                continue
+            evm = t.get("evm_percent")
+            detail = (f"EVM {evm}% / gate {t.get('gate_good')}"
+                      if evm is not None else
+                      ", ".join(f"{k}={v}" for k, v in
+                                (t.get("metrics") or {}).items()))
+            rows.append([f"trial #{i} {t.get('candidate')} "
+                         f"[{t.get('status')}]",
+                         "-" if t.get("score") is None
+                         else f"{t['score']:.3f}",
+                         detail])
+        rows += [["fusion: " + str(l), f"{pr:.3f}", ""]
+                 for l, pr in m.get("alternatives", [])]
         for eng, pred in (m.get("engine_predictions") or {}).items():
             if isinstance(pred, list):
                 rows.append([f"engine {eng}", pred[0], pred[1]])
             elif isinstance(pred, dict):
                 rows.append([f"engine {eng}",
                              ", ".join(f"{k}={v}" for k, v in pred.items()), ""])
-        _fill_table(self.tbl_mod, rows, ["candidate/engine", "value", "score"])
+        _fill_table(self.tbl_mod, rows,
+                    ["candidate / engine", "score", "evidence"])
         # demod
         self.const_plot.clear()
         c = plots.get("constellation")
@@ -554,7 +589,11 @@ class MainWindow(QMainWindow):
         p = d.get("parameters") or {}
         lines.append(f"modulation: {m.get('prediction')} "
                      f"(confidence {m.get('confidence')})")
-        lines.append(f"SNR: {p.get('snr_db')} dB | symbol rate: "
+        state = p.get("snr_state", "valid")
+        lines.append(f"Es/N0: {'>= ' if state == 'saturated' else ''}"
+                     f"{p.get('snr_db')} dB"
+                     + (f" ({state})" if state != "valid" else "")
+                     + " | symbol rate: "
                      f"{p.get('symbol_rate_norm')} normalised"
                      + (f" = {p.get('symbol_rate_hz'):.0f} Bd"
                         if p.get("symbol_rate_hz") else ""))
