@@ -97,6 +97,23 @@ def main(argv=None):
                    help="WAV sample format: 32 = IEEE float32 (default, "
                         "exact), 16 = PCM16")
 
+    sub.choices["analyze"].add_argument(
+        "--preamble", metavar="PATTERN",
+        help="a known bit pattern to correlate against every recovered "
+             "bit stream, as hex bytes (\"A6 3C 91\") or a 0/1 string "
+             "(\"0b1011...\"). Reports the bit offset, the match score, "
+             "which ambiguity transform matched, the frame period implied "
+             "by repeated hits, and the payload region between them")
+
+    for _p in (sub.choices["analyze"], sub.choices["classify"]):
+        _p.add_argument("--rank-all", action="store_true",
+                        help="trial EVERY modulation candidate with the "
+                             "real receiver instead of stopping at the "
+                             "first that clears the acceptance bar. Slower "
+                             "(a full sweep of the 18 linear classes costs "
+                             "about 4 s) but it measures the rank of every "
+                             "class instead of leaving most 'not measured'")
+
     g = sub.add_parser("signatures", help="list the signature library")
 
     args = ap.parse_args(argv)
@@ -135,7 +152,9 @@ def main(argv=None):
     result = an.analyze(args.file, sample_rate=args.sample_rate,
                         center_frequency=args.center_frequency,
                         datatype=args.datatype, signal_index=args.signal,
-                        overrides=overrides, no_ml=args.no_ml)
+                        overrides=overrides, no_ml=args.no_ml,
+                        rank_all=getattr(args, "rank_all", False),
+                        preamble=getattr(args, "preamble", None))
     from .reporting import export_all
     written = export_all(result, args.output)
     _print_summary(result)
@@ -158,9 +177,17 @@ def _detect_only(an, args):
     from .detection import detect_signals
     rec = load_recording(args.file, args.sample_rate, args.center_frequency,
                          args.datatype)
-    x, cond = condition(rec.samples)
-    segs, _ = detect_signals(x, an.config.cfar, sample_rate=rec.sample_rate)
+    x, cond = condition(rec.samples, real_signal=rec.is_real_signal)
+    segs, dbg = detect_signals(x, an.config.cfar,
+                               sample_rate=rec.sample_rate,
+                               positive_only=rec.is_real_signal)
     out = {"recording": rec.meta_dict(),
+           "detection": {
+               "analysis_resolution_bins": dbg.get("chosen_resolution"),
+               "noise_floor_model": dbg.get("chosen_noise_model"),
+               "resolutions_tried": dbg.get("resolutions_tried"),
+               "carrier_cross_check": dbg.get("carrier_cross_check"),
+               "notes": dbg.get("notes", [])},
            "signals": [s.to_dict() for s in segs]}
     if args.json:
         from .common.models import to_json
@@ -169,7 +196,11 @@ def _detect_only(an, args):
         print(f"file: {args.file}")
         for w in rec.warnings:
             print(f"  warning: {w}")
-        print(f"detected {len(segs)} signal(s):")
+        print(f"detected {len(segs)} signal(s) at analysis resolution "
+              f"{dbg.get('chosen_resolution')} bins using the "
+              f"'{dbg.get('chosen_noise_model')}' noise-floor model:")
+        for note in dbg.get("notes", []):
+            print(f"  note: {note}")
         for s in segs:
             line = (f"  [{s.id}] centre {s.center_norm:+.4f} "
                     f"bw {s.bandwidth_norm:.4f} (normalised)  "
@@ -191,32 +222,74 @@ def _classify_only(an, args):
     import copy
     rec = load_recording(args.file, args.sample_rate, args.center_frequency,
                          args.datatype)
-    x, _ = condition(rec.samples)
-    segs, _ = detect_signals(x, an.config.cfar, sample_rate=rec.sample_rate)
+    x, _ = condition(rec.samples, real_signal=rec.is_real_signal)
+    segs, _ = detect_signals(x, an.config.cfar, sample_rate=rec.sample_rate,
+                             positive_only=rec.is_real_signal)
     if not segs:
         print("no signals detected")
         return 1
     seg = segs[min(args.signal, len(segs) - 1)]
     ch = channelize(x, seg)
     p = estimate_parameters(ch["samples"], an.config.params,
-                            sample_rate=ch["sample_rate"])
+                            sample_rate=ch["sample_rate"],
+                            analysis_band_norm=ch.get("analysis_band_norm"))
     mcfg = an.config.modulation
     if args.no_ml:
         mcfg = copy.copy(mcfg)
         mcfg.cvnet_enabled = False
-    m = classify_modulation(ch["samples"], p, mcfg)
+    m = classify_modulation(ch["samples"], p, mcfg,
+                            rank_all=getattr(args, "rank_all", False))
     if args.json:
         print(json.dumps({"parameters": p.to_dict(),
                           "modulation": m.to_dict()}, indent=2, default=str))
     else:
-        print(f"signal {seg.id}: SNR {p.snr_db} dB, "
+        print(f"signal {seg.id}: Es/N0 {p.snr_db} dB [{p.snr_state}], "
               f"Rs {p.symbol_rate_norm} (normalised)")
         print(f"modulation: {m.prediction}  confidence {m.confidence}")
         for label, prob in m.alternatives:
             print(f"    {label:8s} {prob:.3f}")
         if not m.classifier_agreement:
             print("  NOTE: engines disagree - inspect before trusting")
+        _print_trial_table(m)
     return 0
+
+
+def _print_trial_table(m):
+    """Receiver-trial ranking (report §8.3).
+
+    Every candidate is listed, including the ones that were never
+    trialled - marked ``not measured`` - because "tested and rejected"
+    and "never tested" are different statements about a classification.
+    """
+    rows = getattr(m, "trial_ranking", None)
+    if not rows:
+        return
+    # a result reloaded from JSON carries plain dicts, not TrialRank
+    if isinstance(rows[0], dict):
+        from types import SimpleNamespace
+        rows = [SimpleNamespace(**row) for row in rows]
+    print(f"\nreceiver trial ({m.trials_run} of {len(rows)} candidates "
+          f"measured, mode '{m.trial_mode}'):")
+    print(f"  {'#':>2} {'candidate':9s} {'score':>6s} {'prior':>6s} "
+          f"{'EVM%':>6s} {'gate':>6s} {'ratio':>6s} {'occ':>5s} "
+          f"{'struct':>6s} {'sps':>6s}  status")
+    for i, r in enumerate(rows, 1):
+        if not r.measured:
+            print(f"  {i:2d} {r.candidate:9s} {'-':>6s} {r.prior:6.3f} "
+                  f"{'':>6s} {'':>6s} {'':>6s} {'':>5s} {'':>6s} "
+                  f"{'':>6s}  not measured")
+            continue
+        def fmt(v, w=6, p=2):
+            return (f"{v:{w}.{p}f}" if isinstance(v, (int, float))
+                    and not isinstance(v, bool) else f"{'-':>{w}}")
+        print(f"  {i:2d} {r.candidate:9s} {fmt(r.score)} {r.prior:6.3f} "
+              f"{fmt(r.evm_percent)} {fmt(r.gate_good)} {fmt(r.gate_ratio)} "
+              f"{fmt(r.occupancy, 5)} {fmt(r.structure)} "
+              f"{fmt(r.samples_per_symbol, 6, 1)}  {r.status}"
+              + (f"  ({r.reason})" if r.reason and r.score is None else ""))
+    if m.trial_disagreement:
+        print(f"  WARNING: the fused prior favoured {m.prior_winner}, the "
+              f"receiver trial locked {m.trial_winner}")
 
 
 def _cmd_report(args):
@@ -298,8 +371,20 @@ def _print_summary(result):
               f"(confidence {r.modulation.confidence})")
     if r.parameters:
         p = r.parameters
-        print(f"SNR {p.snr_db} dB | Rs {p.symbol_rate_norm} norm"
-              + (f" = {p.symbol_rate_hz:,.0f} Bd" if p.symbol_rate_hz else ""))
+        state = getattr(p, "snr_state", "valid")
+        snr_txt = (f"Es/N0 >= {p.snr_db} dB (saturated)"
+                   if state == "saturated" else
+                   "Es/N0 unresolvable" if p.snr_db is None else
+                   f"Es/N0 {p.snr_db} dB")
+        print(f"{snr_txt} | Rs {p.symbol_rate_norm} norm"
+              + (f" = {p.symbol_rate_hz:,.0f} Bd" if p.symbol_rate_hz else "")
+              + (f" | roll-off {p.excess_bandwidth}"
+                 if p.excess_bandwidth is not None else ""))
+        for note in getattr(p, "reconciliation", []) or []:
+            print(f"  S4/S6 reconciled {note['quantity']}: "
+                  f"{note['s4']} -> {note['s6']}")
+    if r.modulation is not None:
+        _print_trial_table(r.modulation)
     if r.scrambler:
         print(f"scrambler: {r.scrambler.kind} {r.scrambler.name}")
     if r.interleaver:
@@ -316,6 +401,40 @@ def _print_summary(result):
         print(f"payload: {len(r.payload.data)} bytes, "
               f"entropy {r.payload.entropy_bits_per_bit} b/b"
               + (" (likely encrypted)" if r.payload.likely_encrypted else ""))
+    _print_correlation(r)
+
+
+def _print_correlation(r):
+    """Known-pattern correlation: where the preamble is, how good the
+    match is, and what lies between occurrences."""
+    corr = getattr(r, "correlation", None)
+    if not corr:
+        return
+    print(f"\npreamble '{corr['pattern']}' correlation:")
+    for name, res in corr["streams"].items():
+        mark = ">>" if name == corr.get("best_stream") else "  "
+        if not res["n_hits"]:
+            print(f"  {mark} {name}: no match "
+                  f"(threshold {res['threshold_score']:.0%} of "
+                  f"{res['pattern_bits']} bits) - {res['note']}")
+            continue
+        print(f"  {mark} {name}: {res['n_hits']} hit(s) as "
+              f"'{res['best_transform']}'"
+              + (f", period {res['period_bits']} bits"
+                 if res.get("period_bits") else ""))
+        for hit in res["hits"][:5]:
+            byte_off = ("" if hit["offset_bytes"] is None
+                        else f" (byte {hit['offset_bytes']})")
+            print(f"       offset {hit['offset_bits']} bits{byte_off}, "
+                  f"score {hit['score']:.3f} "
+                  f"({hit['matching_bits']}/{hit['pattern_bits']}), "
+                  f"p={hit['p_value']:.2e}")
+        if len(res["hits"]) > 5:
+            print(f"       ... {len(res['hits']) - 5} more")
+        for rng in res["payload_ranges"][:3]:
+            print(f"       payload bits {rng['start_bit']}..{rng['end_bit']} "
+                  f"({rng['length_bits']} bits"
+                  f"{', byte aligned' if rng['byte_aligned'] else ''})")
 
 
 if __name__ == "__main__":
