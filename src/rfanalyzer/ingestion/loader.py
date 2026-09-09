@@ -1,6 +1,7 @@
 """Unified recording loader (stage S0)."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 
@@ -43,6 +44,22 @@ def _raw_iq_to_complex(path: str, dtype: str, endian: str,
     return out
 
 
+def file_digest(path: str, chunk: int = 1 << 22) -> str:
+    """SHA-256 of the source file exactly as stored.
+
+    A report has to be traceable back to the bytes it describes, and a
+    digest over the DECODED samples would not do that: it changes with
+    the dtype interpretation, which is itself one of the things being
+    reported.  Streamed so a multi-gigabyte capture does not have to fit
+    in memory.
+    """
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(chunk), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
 def _find_sigmf_meta(path: str):
     for cand in (path + ".sigmf-meta",
                  os.path.splitext(path)[0] + ".sigmf-meta"):
@@ -61,6 +78,8 @@ def load_recording(path: str, sample_rate: float = None,
     """
     ext = os.path.splitext(path)[1].lower()
     warnings = []
+    digest = file_digest(path)
+    size_bytes = os.path.getsize(path)
 
     # SigMF sidecar?
     meta_path = _find_sigmf_meta(path)
@@ -83,8 +102,9 @@ def load_recording(path: str, sample_rate: float = None,
         meta = read_wav(path)
         samples, is_real = wav_to_complex(meta)
         if is_real:
-            warnings.append("single-channel WAV: treated as real signal "
-                            "(analytic conversion applied downstream)")
+            warnings.append("single-channel WAV: real-valued signal; S1 "
+                            "converts it to the analytic signal and S2 "
+                            "searches only the positive half-band")
         return Recording(
             file_path=path, format="wav", samples=samples,
             sample_rate=sample_rate or meta["sample_rate"],
@@ -94,7 +114,8 @@ def load_recording(path: str, sample_rate: float = None,
                                      "auxi_chunk" if meta.get("center_frequency")
                                      else "unknown"),
             datatype=meta.get("datatype", ""), endianness="little",
-            channels=meta.get("channels", 1),
+            file_sha256=digest, file_size_bytes=size_bytes,
+            channels=meta.get("channels", 1), is_real_signal=bool(is_real),
             timestamp=meta.get("timestamp"), warnings=warnings)
 
     # raw IQ (or sigmf-data)
@@ -130,6 +151,7 @@ def load_recording(path: str, sample_rate: float = None,
         center_frequency_source=("user" if center_frequency else
                                  "sigmf" if sig_meta.get("center_frequency") else "unknown"),
         datatype=chosen["dtype"], endianness=chosen.get("endian", "little"),
+        file_sha256=digest, file_size_bytes=size_bytes,
         format_confidence=chosen.get("confidence", 1.0),
         sniff_report={"candidates": sniff[:5]} if sniff else {},
         warnings=warnings)
