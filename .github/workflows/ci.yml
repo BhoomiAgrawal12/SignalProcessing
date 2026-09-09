@@ -1,0 +1,67 @@
+name: CI
+
+# The repository had no CI configuration at all and pytest was not even
+# installed in the development virtualenv (report §6), so nothing
+# enforced the test suite between commits.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run the test suite
+        run: python -m pytest -q --durations=15
+
+  validate-matrix:
+    # The ground-truth matrix is the regression backbone: it is slower
+    # than the unit tests, so it runs on main and on demand rather than
+    # on every pull request.
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Core matrix, one seed
+        run: |
+          python scripts/validate_matrix.py --quick --seeds 1 \
+            --suite core --output docs/validation_report_ci.json
+
+      - name: Real recording against published ground truth
+        run: python scripts/validate_matrix.py --suite real \
+               --output docs/validation_report_real.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validation-reports
+          path: docs/validation_report_*.json
