@@ -188,9 +188,10 @@ def identify_fec(bits: np.ndarray, config, llrs: np.ndarray = None,
             decoded_bits=decoded, pre_fec_ber=pre_ber,
             score=hit["syndrome_zero_rate"] * (1.0 - min(1.0, 2 * pre_ber))))
 
-    # The RS alignment sweep is the expensive part of this stage; a
-    # confident convolutional hit makes it redundant (concatenated codes
-    # are handled by re-running identification on the decoded stream).
+    # The RS alignment sweep is the expensive part of this stage, so it is
+    # skipped on the RAW stream when a confident convolutional hit already
+    # explains it.  That hit's DECODED stream is swept instead, further
+    # down, because an outer code lives there and not here.
     best_conv = conv_hits[0]["syndrome_zero_rate"] if conv_hits else 0.0
     rs_hits = [] if (best_conv > 0.9 or not try_rs) else \
         identify_rs(bits, config.rs_candidates)
@@ -232,11 +233,93 @@ def identify_fec(bits: np.ndarray, config, llrs: np.ndarray = None,
                 decoded_bits=decoded,
                 score=hit["syndrome_zero_rate"] * 0.97))
 
+    # ---- concatenated codes -------------------------------------------
+    # A concatenated system puts a block code OUTSIDE a convolutional one:
+    # the inner decoder cleans up the channel, and the outer code corrects
+    # what it could not.  The outer code is therefore invisible on the
+    # received stream and only appears once the inner one has decoded -
+    # which is exactly why identifying it needs a second pass over the
+    # DECODED bits rather than another sweep of the same stream.  AO-73's
+    # published format is this shape (CCSDS r=1/2 K=7 inside an
+    # interleaved RS(160,128) pair), and so are most deep-space and
+    # satellite telemetry links.
+    if try_rs:
+        hyps.extend(_identify_outer_stage(hyps, config))
+
     hyps.append(FECHypothesis(family="none", score=0.2,
                               parameters={"reason": "no code identified above threshold"
                                           if not hyps else "fallback"}))
     hyps.sort(key=lambda h: -h.score)
     return hyps
+
+
+def _identify_outer_stage(inner_hyps: list, config,
+                          max_inner: int = 2) -> list:
+    """Look for a block code on the output of an inner decoder.
+
+    Only the strongest inner hypotheses are followed, because the sweep
+    costs the same as the one over the raw stream and a weak inner
+    decode produces bits too corrupted for an outer code to show up in
+    anyway.  A concatenated hypothesis has to BEAT its own inner stage to
+    be reported, so a spurious outer match cannot displace a good simple
+    answer.
+    """
+    out = []
+    candidates = [h for h in inner_hyps
+                  if h.decoded_bits is not None and len(h.decoded_bits) > 2048
+                  and h.family in ("convolutional", "ldpc")]
+    candidates.sort(key=lambda h: -h.score)
+    for inner in candidates[:max_inner]:
+        try:
+            hits = identify_rs(inner.decoded_bits, config.rs_candidates)
+        except Exception:
+            continue
+        for hit in hits[:1]:
+            if hit["syndrome_zero_rate"] < config.min_syndrome_zero_rate:
+                continue
+            rs = RSCode(hit["n"], hit["k"], prim=hit.get("prim", 0x11D),
+                        fcr=hit.get("fcr", 1),
+                        generator=hit.get("generator", 2))
+            decoded = _rs_decode_stream(inner.decoded_bits, rs,
+                                        hit["bit_offset"],
+                                        hit["symbol_offset"])
+            if decoded is None or not len(decoded):
+                continue
+            outer_rate = hit["k"] / hit["n"]
+            inner_rate = inner.code_rate or 0.5
+            chain = (f"{inner.family} (rate {inner_rate:g}) inside "
+                     f"RS({hit['n']},{hit['k']})")
+            # the outer stage has to earn its place: its own syndrome
+            # evidence multiplied by the inner hypothesis's
+            score = inner.score * hit["syndrome_zero_rate"] * 1.05
+            if score <= inner.score:
+                continue
+            out.append(FECHypothesis(
+                family="concatenated",
+                code_rate=inner_rate * outer_rate,
+                parameters={
+                    "chain": chain,
+                    "inner": {"family": inner.family,
+                              "code_rate": inner_rate,
+                              **inner.parameters},
+                    "outer": {"family": "reed_solomon",
+                              "n": hit["n"], "k": hit["k"],
+                              "fcr": hit.get("fcr"),
+                              "prim": hex(hit.get("prim", 0x11D)),
+                              "bit_offset": hit["bit_offset"],
+                              "symbol_offset": hit["symbol_offset"],
+                              "n_codewords_tested":
+                                  hit["n_codewords_tested"]},
+                    "note": "the outer code was identified on the inner "
+                            "decoder's OUTPUT; an interleaver sitting "
+                            "between the two stages is handled by S8 "
+                            "before this stage runs",
+                },
+                syndrome_zero_rate=hit["syndrome_zero_rate"],
+                decoded_bits=decoded,
+                pre_fec_ber=inner.pre_fec_ber,
+                score=score))
+    return out
 
 
 def _rs_decode_stream(bits: np.ndarray, rs: RSCode, bit_off: int,
