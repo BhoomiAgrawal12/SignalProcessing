@@ -879,7 +879,7 @@ function analyzeRecording(buffer, fileName, overrides, progressCb) {
     +((tick() - t0) / 1000).toFixed(3));
 
   const result = {
-    generator: "rf-analyzer web (S0-S5); run the desktop CLI/GUI for the " +
+    generator: "Dhwani web (S0-S5); run the desktop CLI/GUI for the " +
                "bit layer (S7-S10: descrambling, de-interleaving, FEC, CRC)",
     recording: report,
     conditioning,
