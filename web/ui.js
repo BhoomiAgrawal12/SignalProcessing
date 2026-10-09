@@ -1,4 +1,4 @@
-/* Shared UI library for the rf-analyzer web console: tabs, canvas charts
+/* Shared UI library for the Dhwani web console: tabs, canvas charts
  * with hover readouts, tables, badges, the animated pipeline flow, and
  * the payload-intelligence renderer. Plain JS, no dependencies. */
 "use strict";
@@ -18,8 +18,13 @@ const el = (tag, cls, html) => {
   if (html !== undefined) e.innerHTML = html;
   return e;
 };
-const esc = (s) => String(s).replace(/[&<>"]/g,
-  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const esc = (s) => String(s).replace(/[&<>"']/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+/* analysis.json is untrusted: tile() and kvTable() escape every value
+ * unless the caller explicitly marks a fragment it built as html(). */
+const html = (s) => ({ __html: String(s) });
+const isHtml = (v) => v !== null && typeof v === "object" && "__html" in v;
+const frag = (v) => isHtml(v) ? v.__html : esc(v);
 
 /* ---------------- tabs ---------------- */
 function initTabs(navId, onShow) {
@@ -46,13 +51,13 @@ function strengthBadge(strength) {
   return badge(strength, kind);
 }
 function meter(v) {
-  const pct = Math.round(Math.max(0, Math.min(1, v)) * 100);
+  const pct = Math.round(Math.max(0, Math.min(1, Number(v) || 0)) * 100);
   return `<span class="meter"><span class="bar"><i style="width:${pct}%"></i></span>` +
-         `<span class="num">${(v ?? 0).toFixed ? v.toFixed(2) : v}</span></span>`;
+         `<span class="num">${esc(Number(v ?? 0).toFixed(2))}</span></span>`;
 }
 function tile(k, v, sub, accent) {
   return `<div class="tile${accent ? " accent" : ""}"><div class="k">${esc(k)}</div>` +
-         `<div class="v">${v}</div>${sub ? `<div class="s">${sub}</div>` : ""}</div>`;
+         `<div class="v">${frag(v)}</div>${sub ? `<div class="s">${frag(sub)}</div>` : ""}</div>`;
 }
 
 /* ---------------- tables ---------------- */
@@ -68,7 +73,8 @@ function kvTable(target, rows, headers) {
     const tr = el("tr");
     for (const v of row) {
       const td = el("td");
-      td.innerHTML = v === null || v === undefined ? "&ndash;" : String(v);
+      if (isHtml(v)) td.innerHTML = v.__html;
+      else td.textContent = v === null || v === undefined ? "\u2013" : String(v);
       tr.appendChild(td);
     }
     t.appendChild(tr);
@@ -297,7 +303,7 @@ function renderPipeline(target, trace, opts = {}) {
 
   const stages = [];
   trace.forEach((t, i) => {
-    const row = el("div", `flow-stage ${t.status}`);
+    const row = el("div", `flow-stage ${esc(t.status)}`);
     if (i < trace.length - 1) row.appendChild(el("div", "wire"));
     row.appendChild(el("div", "node"));
     row.appendChild(el("div", "sid", esc(t.stage)));
@@ -315,8 +321,8 @@ function renderPipeline(target, trace, opts = {}) {
     const meta = el("div", "meta");
     const statusKind = { executed: "good", ready: "info",
                          skipped: "dim", stopped: "bad" }[t.status] || "dim";
-    meta.innerHTML = badge(t.status.toUpperCase(), statusKind) +
-      (t.elapsed_s != null ? `<span class="time">${t.elapsed_s}s</span>` : "");
+    meta.innerHTML = badge(String(t.status).toUpperCase(), statusKind) +
+      (t.elapsed_s != null ? `<span class="time">${esc(t.elapsed_s)}s</span>` : "");
     row.appendChild(meta);
     list.appendChild(row);
     stages.push(row);
@@ -361,7 +367,7 @@ function renderFinding(f) {
   const det = f.details || {};
   if (det.preview || det.decoded_preview) {
     d.appendChild(el("div", "mono",
-      `&gt; ${esc((det.preview || det.decoded_preview)).slice(0, 200)}`));
+      `&gt; ${esc(String(det.preview || det.decoded_preview).slice(0, 200))}`));
   }
   return d;
 }
@@ -386,13 +392,13 @@ function renderPayloadIntel(container, pi, payloadHexStr) {
   const summ = pi.summary || {};
   const tiles = el("div", "tiles");
   tiles.innerHTML =
-    tile("classification", esc(summ.classification || "-"),
-         strengthBadge(summ.strength) + " " + meter(summ.confidence || 0), true) +
-    tile("payload size", `${bf.n_bytes ?? 0} <small>bytes</small>`,
+    tile("classification", summ.classification || "-",
+         html(strengthBadge(summ.strength) + " " + meter(summ.confidence || 0)), true) +
+    tile("payload size", html(`${esc(bf.n_bytes ?? 0)} <small>bytes</small>`),
          `${bf.n_bits ?? "-"} bits`) +
-    tile("entropy", `${bf.entropy_bits_per_byte ?? "-"} <small>bits/byte</small>`,
+    tile("entropy", html(`${esc(bf.entropy_bits_per_byte ?? "-")} <small>bits/byte</small>`),
          `normalised ${bf.entropy_normalised ?? "-"}`) +
-    tile("printable", `${((bf.printable_ratio ?? 0) * 100).toFixed(1)}<small>%</small>`,
+    tile("printable", html(`${esc((Number(bf.printable_ratio ?? 0) * 100).toFixed(1))}<small>%</small>`),
          `${bf.unique_bytes ?? "-"} unique byte values`);
   const p0 = el("div", "panel");
   p0.appendChild(el("h3", null, "S11 &mdash; payload intelligence summary"));
@@ -441,16 +447,16 @@ function renderPayloadIntel(container, pi, payloadHexStr) {
     const p = el("div", "panel");
     p.appendChild(el("h3", null,
       "cross-frame field map <span class='hint'>byte roles inferred " +
-      `across ${((pi.structure || {}).cross_frame || {}).n_frames || "?"} frames</span>`));
+      `across ${esc(((pi.structure || {}).cross_frame || {}).n_frames || "?")} frames</span>`));
     const strip = el("div", "fieldmap");
     const total = fields.reduce((s, f) => s + f.length_bytes, 0) || 1;
     for (const f of fields) {
-      const seg = el("div", f.role.replace("length-field candidate", "length-field"));
-      seg.style.width = (f.length_bytes / total * 100) + "%";
+      const seg = el("div", String(f.role).replace("length-field candidate", "length-field"));
+      seg.style.width = (Number(f.length_bytes) / total * 100) + "%";
       seg.title = `bytes ${f.start_byte}-${f.start_byte + f.length_bytes - 1}: ` +
         `${f.role}${f.note ? " (" + f.note + ")" : ""}, entropy ${f.mean_entropy}`;
       if (f.length_bytes / total > 0.08)
-        seg.textContent = `${f.role.split("/")[0]} ${f.length_bytes}B`;
+        seg.textContent = `${String(f.role).split("/")[0]} ${f.length_bytes}B`;
       strip.appendChild(seg);
     }
     p.appendChild(strip);
@@ -460,7 +466,7 @@ function renderPayloadIntel(container, pi, payloadHexStr) {
       `<span><i style="background:${COL.series2}"></i>length field</span>` +
       `<span><i style="background:#3a4658"></i>variable/payload</span>`));
     const rows = fields.map((f) => [f.start_byte, f.length_bytes,
-      esc(f.role), f.mean_entropy, esc(f.note || "")]);
+      f.role, f.mean_entropy, f.note || ""]);
     const tbl = el("table", "kv");
     p.appendChild(tbl);
     kvTable(tbl, rows, ["start byte", "length", "inferred role",
@@ -498,16 +504,16 @@ function renderPayloadIntel(container, pi, payloadHexStr) {
   pm.appendChild(el("h3", null, "message reconstruction"));
   if (msgs.available) {
     pm.appendChild(el("p", null,
-      `<span style="color:var(--ink2)">${msgs.n_messages} messages, ` +
-      `${msgs.header_bytes} header byte(s) split from payload</span>`));
+      `<span style="color:var(--ink2)">${esc(msgs.n_messages)} messages, ` +
+      `${esc(msgs.header_bytes)} header byte(s) split from payload</span>`));
     const tbl = el("table", "kv");
     pm.appendChild(tbl);
     kvTable(tbl, (msgs.messages || []).slice(0, 12).map((m) => [
       m.index, m.length_bytes,
-      `<span class="mono">${esc(m.header_hex || "")}</span>`,
+      html(`<span class="mono">${esc(m.header_hex || "")}</span>`),
       m.payload_text !== null && m.payload_text !== undefined
-        ? esc(m.payload_text)
-        : `<span class="mono">${esc((m.payload_hex || "").slice(0, 32))}...</span>`,
+        ? m.payload_text
+        : html(`<span class="mono">${esc(String(m.payload_hex || "").slice(0, 32))}...</span>`),
     ]), ["#", "bytes", "header", "payload"]);
   } else {
     pm.appendChild(el("p", null,
@@ -540,7 +546,7 @@ function renderPayloadIntel(container, pi, payloadHexStr) {
   }
 }
 
-return { COL, $, el, esc, initTabs, badge, strengthBadge, meter, tile,
+return { COL, $, el, esc, html, initTabs, badge, strengthBadge, meter, tile,
          kvTable, lineChart, barChart, scatterChart, heatmap, eyeChart,
          hexdump, renderPipeline, renderFinding, renderPayloadIntel };
 })();

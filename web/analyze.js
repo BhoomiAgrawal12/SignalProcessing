@@ -1,4 +1,4 @@
-/* rf-analyzer browser analysis engine.
+/* Dhwani browser analysis engine.
  *
  * Implements the front half of the pipeline entirely client-side so a
  * .wav or raw .iq recording can be analysed without any upload:
@@ -219,6 +219,35 @@ function parseWav(buffer) {
   return { meta, I, Q };
 }
 
+/* Real (mono) input at fs -> complex baseband at fs/2: mix by -fs/4,
+ * 63-tap Hamming half-band low-pass, decimate by 2. Same filter as
+ * real_to_complex in ingestion/wav.py (scipy firwin(63, 0.5)). */
+function realToComplex(x) {
+  const taps = 63, c = (taps - 1) / 2, h = new Float64Array(taps);
+  let sum = 0;
+  for (let k = 0; k < taps; k++) {
+    const t = k - c;
+    h[k] = (t === 0 ? 0.5 : Math.sin(Math.PI * t / 2) / (Math.PI * t)) *
+      (0.54 - 0.46 * Math.cos(2 * Math.PI * k / (taps - 1)));
+    sum += h[k];
+  }
+  for (let k = 0; k < taps; k++) h[k] /= sum;
+  const mr = [1, 0, -1, 0], mi = [0, -1, 0, 1];   /* exp(-j*pi*m/2) */
+  const n = Math.ceil(x.length / 2);
+  const I = new Float64Array(n), Q = new Float64Array(n);
+  for (let o = 0; o < n; o++) {
+    let sr = 0, si = 0;
+    for (let k = 0; k < taps; k++) {
+      const m = 2 * o + c - k;
+      if (m < 0 || m >= x.length) continue;
+      sr += h[k] * x[m] * mr[m & 3];
+      si += h[k] * x[m] * mi[m & 3];
+    }
+    I[o] = sr; Q[o] = si;
+  }
+  return { I, Q };
+}
+
 function ingest(buffer, fileName, overrides) {
   overrides = overrides || {};
   const report = { warnings: [] };
@@ -234,8 +263,12 @@ function ingest(buffer, fileName, overrides) {
       wav.meta.centerFrequency || null;
     report.channels = wav.meta.channels;
     if (wav.meta.isReal) {
-      report.warnings.push("single-channel WAV treated as real signal; " +
-        "spectrum is one-sided");
+      ({ I, Q } = realToComplex(I));
+      report.sampleRate /= 2;
+      report.centerFrequency = (report.centerFrequency || 0) + report.sampleRate / 2;
+      report.warnings.push("single-channel WAV: real signal converted to " +
+        "complex baseband (mixed by -fs/4, half-band filtered, decimated by " +
+        "2); sample rate is fs/2 and the centre frequency is shifted by fs/4");
     }
   } else {
     report.format = "raw_iq";
@@ -265,11 +298,36 @@ function ingest(buffer, fileName, overrides) {
 }
 
 /* ---------------------------------------------------- S1 conditioning */
+/* Receiver DC offset is in every sample, noise-only stretches included;
+ * a zero-CFO burst's own mean (constant frame fields) is not. Measure it on
+ * blocks >= 6 dB below the 90th-percentile block power, else fall back to
+ * the whole mean (same as _hardware_dc in conditioning/conditioner.py). */
+function hardwareDc(I, Q) {
+  const B = 1024, nb = Math.floor(I.length / B);
+  if (nb >= 4) {
+    const pw = new Float64Array(nb);
+    for (let b = 0; b < nb; b++) {
+      let s = 0;
+      for (let i = b * B; i < (b + 1) * B; i++) s += I[i] * I[i] + Q[i] * Q[i];
+      pw[b] = s / B;
+    }
+    const thr = 0.25 * percentile(pw, 90);
+    let mi = 0, mq = 0, cnt = 0;
+    for (let b = 0; b < nb; b++) {
+      if (pw[b] >= thr) continue;
+      for (let i = b * B; i < (b + 1) * B; i++) { mi += I[i]; mq += Q[i]; }
+      cnt += B;
+    }
+    if (cnt >= 2 * B) return [mi / cnt, mq / cnt, true];
+  }
+  let mi = 0, mq = 0;
+  for (let i = 0; i < I.length; i++) { mi += I[i]; mq += Q[i]; }
+  return [mi / I.length, mq / I.length, false];
+}
+
 function conditionIQ(I, Q) {
   const n = I.length;
-  let mi = 0, mq = 0;
-  for (let i = 0; i < n; i++) { mi += I[i]; mq += Q[i]; }
-  mi /= n; mq /= n;
+  const [mi, mq] = hardwareDc(I, Q);
   let peak = 0;
   for (let i = 0; i < n; i++) {
     I[i] -= mi; Q[i] -= mq;
@@ -628,7 +686,10 @@ function fskTones(I, Q) {
         else if (hs[i] > hs[peaks[peaks.length - 1]]) peaks[peaks.length - 1] = i;
       }
     }
-    if (peaks.length < 2 || peaks.length > 8) continue;
+    /* rank only windows resolving a valid tone count: windows longer than
+     * a symbol merge neighbours into spurious peaks (same rule as fsk_tones
+     * in params/estimators.py) */
+    if (![2, 4, 8].includes(peaks.length)) continue;
     const width = Math.max(2, Math.floor(bins / (4 * peaks.length)));
     const inPeak = new Uint8Array(bins);
     for (const p of peaks) {
@@ -640,7 +701,7 @@ function fskTones(I, Q) {
     const centers = peaks.map((p) => lo + (p + 0.5) / bins * (hi - lo));
     if (!best || frac > best.frac) best = { nTones: peaks.length, frac, centers, w };
   }
-  if (!best || ![2, 4, 8].includes(best.nTones) || best.frac < 0.5) {
+  if (!best || best.frac < 0.5) {
     return { isFsk: false, cv: +cv.toFixed(3),
              note: "constant envelope but no clean tone structure" };
   }
@@ -841,7 +902,7 @@ function makeTrace() {
       return STAGE_TITLES.map(([sid, title]) => {
         const e = entries[sid] || { status: "skipped",
           summary: stopReason ||
-            "requires the desktop engine: rf-analyzer analyze <file>",
+            "requires the desktop engine: dhwani analyze <file>",
           elapsed_s: null };
         return { stage: sid, title, ...e };
       });
@@ -984,7 +1045,7 @@ function analyzeRecording(buffer, fileName, overrides, progressCb) {
 
 /* node export for the test harness */
 if (typeof module !== "undefined") {
-  module.exports = { analyzeRecording, sniffRawIQ, parseWav, ingest,
+  module.exports = { analyzeRecording, sniffRawIQ, parseWav, ingest, realToComplex,
                      computeWaterfall, detectSignals, channelize,
                      symbolRate, fskTones, classifyModulation, m2m4Snr,
                      occupiedBandwidth, envelopeCv };

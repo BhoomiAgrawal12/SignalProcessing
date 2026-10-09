@@ -47,6 +47,7 @@ const tabs = UI.initTabs("tabs", (name) => {
 /* ------------- render ------------- */
 function fmtHz(v) {
   if (v == null) return null;
+  v = Number(v);
   if (Math.abs(v) >= 1e6) return (v / 1e6).toFixed(3) + " MHz";
   if (Math.abs(v) >= 1e3) return (v / 1e3).toFixed(2) + " kHz";
   return v.toFixed(1) + " Hz";
@@ -60,8 +61,8 @@ function render(d) {
   $("repline").innerHTML =
     `run <b>${UI.esc(d.run_id || "?")}</b> &middot; ` +
     `${UI.esc((rec.file_path || "").split("/").pop())} &middot; ` +
-    `${rec.format || "?"} &middot; ` +
-    `${rec.sample_rate ? fmtHz(rec.sample_rate) + " sample rate" : "sample rate unknown"}` +
+    `${UI.esc(rec.format || "?")} &middot; ` +
+    `${rec.sample_rate ? UI.esc(fmtHz(+rec.sample_rate)) + " sample rate" : "sample rate unknown"}` +
     `<span class="cursor"></span>`;
 
   renderOverview(d);
@@ -84,39 +85,41 @@ function renderOverview(d) {
   const crc = fr.crc;
   const conf = m.confidence || 0;
   $("ov_tiles").innerHTML =
-    UI.tile("modulation", UI.esc(m.prediction || "unknown"),
-            UI.meter(conf) + (m.classifier_agreement === false ?
-              " " + UI.badge("ENGINES DISAGREE", "warn") : ""), true) +
-    UI.tile("symbol rate", p.symbol_rate_hz ?
-            `${(p.symbol_rate_hz / 1e3).toFixed(2)} <small>kBd</small>` :
-            `${p.symbol_rate_norm ?? "-"} <small>norm</small>`,
+    UI.tile("modulation", m.prediction || "unknown",
+            UI.html(UI.meter(conf) + (m.classifier_agreement === false ?
+              " " + UI.badge("ENGINES DISAGREE", "warn") : "")), true) +
+    UI.tile("symbol rate", UI.html(p.symbol_rate_hz ?
+            `${UI.esc((p.symbol_rate_hz / 1e3).toFixed(2))} <small>kBd</small>` :
+            `${UI.esc(p.symbol_rate_norm_recording ?? p.symbol_rate_norm ?? "-")} <small>sym/sample</small>`),
             p.samples_per_symbol ? `${p.samples_per_symbol} samples/symbol` : "") +
-    UI.tile("SNR", `${p.snr_db ?? "-"} <small>dB</small>`,
+    UI.tile("SNR", UI.html(`${UI.esc(p.snr_db ?? "-")} <small>dB</small>`),
             ((d.parameters || {}).confidences || {}).snr ?
-            UI.esc(d.parameters.confidences.snr.method) : "") +
-    UI.tile("FEC", UI.esc(fec.family || "-"),
+            d.parameters.confidences.snr.method : "") +
+    UI.tile("FEC", fec.family || "-",
             fec.syndrome_zero_rate != null ?
             `syndrome-zero ${(fec.syndrome_zero_rate * 100).toFixed(1)}%` : "") +
     UI.tile("frame / CRC",
-            fr.frame_length_bits ? `${fr.frame_length_bits} <small>bits</small>` : "-",
-            crc ? UI.badge(`${crc.name} ${Math.round((crc.pass_fraction || 0) * 100)}%`,
+            fr.frame_length_bits ? UI.html(`${UI.esc(fr.frame_length_bits)} <small>bits</small>`) : "-",
+            UI.html(crc ? UI.badge(`${crc.name} ${Math.round((crc.pass_fraction || 0) * 100)}%`,
                            crc.pass_fraction > 0.9 ? "good" : "warn")
-                : UI.badge("no CRC found", "dim")) +
-    UI.tile("payload", pl.n_bytes != null ? `${pl.n_bytes} <small>bytes</small>` : "-",
-            pi.summary ? `${UI.esc(pi.summary.classification)} ` +
-              UI.strengthBadge(pi.summary.strength) :
+                : UI.badge("no CRC found", "dim"))) +
+    UI.tile("payload", pl.n_bytes != null ? UI.html(`${UI.esc(pl.n_bytes)} <small>bytes</small>`) : "-",
+            pi.summary ? UI.html(`${UI.esc(pi.summary.classification)} ` +
+              UI.strengthBadge(pi.summary.strength)) :
             (pl.likely_encrypted ? "high entropy" : ""));
 
   const rec = d.recording || {};
   UI.kvTable("ov_identity", [
-    ["file", UI.esc(rec.file_path || "-")],
+    ["file", rec.file_path || "-"],
     ["format", `${rec.format || "-"} / ${rec.datatype || "-"}`],
-    ["sample rate", rec.sample_rate ? `${fmtHz(rec.sample_rate)} ` +
-      `<span class="mono">(${rec.sample_rate_source})</span>` :
-      "unknown (headerless raw IQ)"],
+    ["sample rate", rec.sample_rate ? UI.html(`${UI.esc(fmtHz(rec.sample_rate))} ` +
+      `<span class="mono">(${UI.esc(rec.sample_rate_source)})</span>`) :
+      "unknown (headerless raw IQ)" + ((p.sample_rate_candidates || []).length ?
+        "; PROBABLE candidates: " + p.sample_rate_candidates.slice(0, 4)
+          .map((c) => fmtHz(c.sample_rate_hz)).join(", ") : "")],
     ["centre frequency", rec.center_frequency ?
       fmtHz(rec.center_frequency) : "-"],
-    ["duration", rec.duration_s ? rec.duration_s.toFixed(4) + " s" : "-"],
+    ["duration", rec.duration_s ? Number(rec.duration_s).toFixed(4) + " s" : "-"],
     ["carrier offset", p.carrier_offset_norm != null ?
       `${p.carrier_offset_norm} norm` +
       (p.carrier_offset_hz ? ` = ${fmtHz(p.carrier_offset_hz)}` : "") : "-"],
@@ -127,15 +130,15 @@ function renderOverview(d) {
 
   const scr = d.scrambler || {}, il = d.interleaver || {};
   UI.kvTable("ov_bitlayer", [
-    ["scrambler", `${UI.esc(scr.name || scr.kind || "-")}` +
-      (scr.seed != null ? ` <span class="mono">phase ${scr.seed}</span>` : "")],
-    ["interleaver", `${UI.esc(il.kind || "-")} ` +
-      `<span class="mono">${UI.esc(JSON.stringify(il.parameters || {}))}</span>`],
-    ["FEC", `${UI.esc(fec.family || "-")} ` +
-      `<span class="mono">${UI.esc(JSON.stringify(fec.parameters || {}))}</span>`],
+    ["scrambler", UI.html(`${UI.esc(scr.name || scr.kind || "-")}` +
+      (scr.seed != null ? ` <span class="mono">phase ${UI.esc(scr.seed)}</span>` : ""))],
+    ["interleaver", UI.html(`${UI.esc(il.label || il.kind || "-")} ` +
+      `<span class="mono">${UI.esc(JSON.stringify(il.parameters || {}))}</span>`)],
+    ["FEC", UI.html(`${UI.esc(fec.family || "-")} ` +
+      `<span class="mono">${UI.esc(JSON.stringify(fec.parameters || {}))}</span>`)],
     ["sync word", fr.sync_word_hex ?
-      `<span class="mono">${UI.esc(fr.sync_word_hex)}</span>` : "-"],
-    ["CRC", crc ? `${crc.name} &middot; passes ${crc.passes}/${crc.total}` : "none found"],
+      UI.html(`<span class="mono">${UI.esc(fr.sync_word_hex)}</span>`) : "-"],
+    ["CRC", crc ? `${crc.name} \u00b7 passes ${crc.passes}/${crc.total}` : "none found"],
     ["hypotheses examined", (d.hypotheses || []).length],
   ]);
   $("ov_warn").innerHTML = (d.warnings || []).slice(0, 4)
@@ -161,40 +164,40 @@ function stageDetail(sid, d) {
   const rowsFor = {
     S0: () => Object.entries(d.recording || {})
       .filter(([k]) => !["sniff_report", "warnings"].includes(k))
-      .map(([k, v]) => [k, UI.esc(String(v))]),
+      .map(([k, v]) => [k, String(v)]),
     S1: () => Object.entries(d.conditioning || {})
       .filter(([k]) => k !== "warnings")
-      .map(([k, v]) => [k, UI.esc(JSON.stringify(v))]),
+      .map(([k, v]) => [k, JSON.stringify(v)]),
     S2: () => (d.segments || []).map((s) => [`signal ${s.id}`,
       `centre ${(+s.center_norm).toFixed(4)}, bw ${(+s.bandwidth_norm).toFixed(4)}, ` +
       `SNR ${s.snr_db} dB`]),
     S3: () => Object.entries(d.selected_segment || {})
-      .map(([k, v]) => [k, UI.esc(String(v))]),
+      .map(([k, v]) => [k, String(v)]),
     S4: () => Object.entries(d.parameters || {})
       .filter(([k, v]) => k !== "confidences" && v !== null)
-      .map(([k, v]) => [k, UI.esc(JSON.stringify(v))]),
+      .map(([k, v]) => [k, JSON.stringify(v)]),
     S5: () => {
       const m = d.modulation || {};
       return [["prediction", `${m.prediction} (${m.confidence})`],
               ...(m.alternatives || []).map((a) => ["candidate", `${a[0]}: ${a[1]}`]),
               ...Object.entries(m.engine_predictions || {}).map(
-                ([k, v]) => ["engine " + k, UI.esc(JSON.stringify(v))])];
+                ([k, v]) => ["engine " + k, JSON.stringify(v)])];
     },
     S6: () => Object.entries(d.demodulation || {})
-      .map(([k, v]) => [k, UI.esc(JSON.stringify(v))]),
-    S7: () => [["scrambler", UI.esc(JSON.stringify(d.scrambler || {}))],
+      .map(([k, v]) => [k, JSON.stringify(v)]),
+    S7: () => [["scrambler", JSON.stringify(d.scrambler || {})],
                ["candidate streams", (d.hypotheses || []).length]],
-    S8: () => [["verdict", UI.esc(JSON.stringify(
+    S8: () => [["verdict", JSON.stringify(
       { kind: (d.interleaver || {}).kind,
-        parameters: (d.interleaver || {}).parameters }))]],
-    S9: () => [["verdict", UI.esc(JSON.stringify(
+        parameters: (d.interleaver || {}).parameters })]],
+    S9: () => [["verdict", JSON.stringify(
       { family: (d.fec || {}).family, parameters: (d.fec || {}).parameters,
-        syndrome_zero_rate: (d.fec || {}).syndrome_zero_rate }))]],
+        syndrome_zero_rate: (d.fec || {}).syndrome_zero_rate })]],
     S10: () => {
       const fr = d.frames || {};
       return [["frame bits", fr.frame_length_bits],
               ["sync", fr.sync_word_hex],
-              ["crc", UI.esc(JSON.stringify(fr.crc))]];
+              ["crc", JSON.stringify(fr.crc)]];
     },
     S11: () => {
       const pi = d.payload_intelligence || {};
@@ -202,7 +205,7 @@ function stageDetail(sid, d) {
       return [["classification",
                `${pi.summary.classification} (${pi.summary.strength})`],
               ...(pi.findings || []).slice(0, 6).map((f) =>
-                [f.category, `${UI.esc(f.verdict)} @ ${f.confidence}`])];
+                [f.category, `${f.verdict} @ ${f.confidence}`])];
     },
     S12: () => [["formats", "JSON, CSV, payload.bin + hex, SigMF sidecar, " +
                  "PDF sheet, GNU Radio flowgraph"]],
@@ -224,15 +227,10 @@ function renderSpectrumTab(d) {
 
 function renderDemodTab(d) {
   const dm = d.demodulation || {};
-  const ds = dm.demodulation_status;
-  if (ds) {
-    const el0 = document.getElementById("mod_head");
-    // status chip is prepended in renderDemodTab below via mod_head
-  }
   UI.kvTable("demod_tbl",
     [...Object.entries(dm).filter(([k]) => k !== "lock_metrics"),
      ...Object.entries(dm.lock_metrics || {}).map(([k, v]) => ["lock." + k, v])]
-      .map(([k, v]) => [k, UI.esc(JSON.stringify(v))]));
+      .map(([k, v]) => [k, JSON.stringify(v)]));
   const m = d.modulation || {};
   const ds2 = (d.demodulation || {}).demodulation_status;
   $("mod_head").innerHTML =
@@ -243,32 +241,32 @@ function renderDemodTab(d) {
     (m.classifier_agreement === false ? " " + UI.badge("ENGINES DISAGREE", "warn") : "");
   const rows = (m.alternatives || []).map((a) => ["fusion candidate", a[0], a[1]]);
   for (const [eng, pred] of Object.entries(m.engine_predictions || {}))
-    rows.push(["engine " + eng, Array.isArray(pred) ? pred[0] : UI.esc(JSON.stringify(pred)),
+    rows.push(["engine " + eng, Array.isArray(pred) ? pred[0] : JSON.stringify(pred),
                Array.isArray(pred) ? pred[1] : ""]);
   for (const c of m.constraints_applied || [])
-    rows.push(["constraint", UI.esc(String(c)), ""]);
+    rows.push(["constraint", String(c), ""]);
   UI.kvTable("mod_tbl", rows, ["source", "value", "score"]);
 }
 
 function renderBitlayerTab(d) {
   const scr = d.scrambler || {}, il = d.interleaver || {}, fec = d.fec || {};
   UI.kvTable("bl_tbl", [
-    ["scrambler", UI.esc(scr.kind || "-"),
-     `${UI.esc(scr.name || "")} ${scr.polynomial_hex ? "poly " + scr.polynomial_hex : ""} ` +
+    ["scrambler", scr.kind || "-",
+     `${scr.name || ""} ${scr.polynomial_hex ? "poly " + scr.polynomial_hex : ""} ` +
      `${scr.seed != null ? "phase " + scr.seed : ""}`],
-    ["interleaver", UI.esc(il.kind || "-"),
-     `<span class="mono">${UI.esc(JSON.stringify(il.parameters || {}))}</span>`],
-    ["FEC", UI.esc(fec.family || "-"),
-     `<span class="mono">${UI.esc(JSON.stringify(fec.parameters || {}))}</span> ` +
+    ["interleaver", il.label || il.kind || "-",
+     UI.html(`<span class="mono">${UI.esc(JSON.stringify(il.parameters || {}))}</span>`)],
+    ["FEC", fec.family || "-",
+     UI.html(`<span class="mono">${UI.esc(JSON.stringify(fec.parameters || {}))}</span> ` +
      (fec.syndrome_zero_rate != null ?
       UI.badge(`szr ${fec.syndrome_zero_rate}`,
-               fec.syndrome_zero_rate > 0.9 ? "good" : "warn") : "")],
+               fec.syndrome_zero_rate > 0.9 ? "good" : "warn") : ""))],
   ], ["stage", "verdict", "parameters / evidence"]);
   UI.kvTable("hyps", (d.hypotheses || []).map((h) => [
-    h.stage, UI.badge(h.status, h.status === "validated" ? "good" :
-                      h.status === "rejected" ? "dim" : "info"),
-    (h.score ?? 0).toFixed ? h.score.toFixed(3) : h.score,
-    `<span class="mono">${UI.esc(JSON.stringify(h.assumptions)).slice(0, 150)}</span>`]),
+    h.stage, UI.html(UI.badge(h.status, h.status === "validated" ? "good" :
+                      h.status === "rejected" ? "dim" : "info")),
+    Number(h.score ?? 0).toFixed(3),
+    UI.html(`<span class="mono">${UI.esc(String(JSON.stringify(h.assumptions)).slice(0, 150))}</span>`)]),
     ["stage", "status", "score", "assumptions"]);
 }
 
@@ -277,25 +275,25 @@ function renderFramesTab(d) {
   const rows = [
     ["frame length", fr.frame_length_bits != null ? fr.frame_length_bits + " bits" : "-"],
     ["sync word", fr.sync_word_hex ?
-      `<span class="mono">${UI.esc(fr.sync_word_hex)}</span>` : "-"],
+      UI.html(`<span class="mono">${UI.esc(fr.sync_word_hex)}</span>`) : "-"],
     ["sync offset", fr.sync_offset],
     ["CRC", fr.crc ? `${fr.crc.name}, poly ${fr.crc.poly}, ` +
       `passes ${fr.crc.passes}/${fr.crc.total}` : "none found"],
   ];
   for (const f of fr.field_map || [])
     rows.push([`bits ${f.start_bit}-${f.start_bit + f.length_bits - 1}`,
-               `${UI.esc(f.role)} (entropy ${f.mean_entropy})`]);
+               `${f.role} (entropy ${f.mean_entropy})`]);
   UI.kvTable("frames_tbl", rows);
   const pl = d.payload || {};
   $("pl_meta").innerHTML =
-    `${pl.n_bytes ?? 0} bytes &middot; entropy ${pl.entropy_bits_per_bit ?? "-"} b/b ` +
+    `${UI.esc(pl.n_bytes ?? 0)} bytes &middot; entropy ${UI.esc(pl.entropy_bits_per_bit ?? "-")} b/b ` +
     (pl.likely_encrypted ? UI.badge("HIGH ENTROPY", "warn") : "");
   if (pl.hex)
     UI.hexdump("hexdump", pl.hex.match(/.{2}/g).map((h) => parseInt(h, 16)));
 }
 
 function renderLogTab(d) {
-  UI.kvTable("warns", (d.warnings || []).map((w) => [UI.esc(w)]));
+  UI.kvTable("warns", (d.warnings || []).map((w) => [w]));
   UI.kvTable("timings", Object.entries(d.stage_timings || {})
     .map(([k, v]) => [k, v + " s"]));
   const blob = new Blob([JSON.stringify(d, null, 2)], { type: "application/json" });
@@ -329,6 +327,9 @@ function drawCharts(pane) {
     const ent = (d.frames || {}).column_entropy || plots.entropy_map;
     if (ent) UI.barChart("entropy", ent, { max: 1, xlabel: "bit position in frame",
       index: (i) => "bit " + i });
+    const ac = plots.bit_autocorr;
+    if (ac && ac.length > 2) UI.lineChart("autocorr", ac.map((_, i) => i).slice(1),
+      ac.slice(1), { xlabel: "lag (bits)" });
   } else return;
   drawn.add(pane);
 }
