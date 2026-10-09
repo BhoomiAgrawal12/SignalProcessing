@@ -21,6 +21,10 @@ const drawn = new Set();
     e.preventDefault(); drop.classList.remove("hover");
     if (e.dataTransfer.files.length) load(e.dataTransfer.files[0]);
   });
+  $("demo_btn").addEventListener("click", () =>
+    fetch("demo/demo_chain.wav").then((r) => r.blob())
+      .then((b) => load(new File([b], "demo_chain.wav")))
+      .catch((e) => alert("demo recording unavailable: " + e)));
   for (const id of ["ov_rate", "ov_cf", "ov_dtype"])
     $(id).addEventListener("change", () => currentBuffer && run(0));
 })();
