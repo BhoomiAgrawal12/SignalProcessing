@@ -36,16 +36,19 @@ class StageTimer:
 
     @contextmanager
     def stage(self, name: str, **params):
+        """Re-entering a stage (S1/S2 run once per scanned window) adds up."""
         t0 = time.perf_counter()
         self.logger.info("stage %s started %s", name,
                          f"params={params}" if params else "")
         try:
             yield
         except Exception:
-            self.timings[name] = time.perf_counter() - t0
+            self.timings[name] = self.timings.get(name, 0.0) + \
+                time.perf_counter() - t0
             self.logger.exception("stage %s FAILED after %.2fs", name,
                                   self.timings[name])
             raise
         else:
-            self.timings[name] = time.perf_counter() - t0
+            self.timings[name] = self.timings.get(name, 0.0) + \
+                time.perf_counter() - t0
             self.logger.info("stage %s finished in %.2fs", name, self.timings[name])

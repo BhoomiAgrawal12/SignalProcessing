@@ -7,7 +7,7 @@ Design notes
   never fabricate a value.
 * Sample-rate-dependent quantities are stored in normalised units
   (cycles/sample) alongside absolute units, because for headerless .iq files
-  the absolute sample rate is genuinely unknowable (see report §2, S0 note).
+  the absolute sample rate is genuinely unknowable.
 """
 from __future__ import annotations
 
@@ -123,6 +123,7 @@ class ConditioningReport:
     clipping_fraction: float = 0.0
     dead_air_fraction: float = 0.0
     noise_floor_db: Optional[float] = None
+    analysed_samples: int = 0          # S1 keeps only the first window
     warnings: list = field(default_factory=list)
 
 
@@ -188,6 +189,14 @@ class SignalParameters:
     # lines can outrank the true rate line, so downstream hypothesis
     # tests must be able to revisit the runners-up
     symbol_rate_candidates: list = field(default_factory=list)
+    # the channeliser decimates narrowband signals: symbol_rate_norm and
+    # samples_per_symbol are per CHANNELISED sample (what S6 consumes);
+    # rate_ratio = channelised / recorded rate, and the value a user reads
+    # or overrides is symbol_rate_norm_recording (per recorded sample)
+    rate_ratio: float = 1.0
+    symbol_rate_norm_recording: Optional[float] = None
+    # headerless IQ only: PROBABLE absolute sample rates, never the value
+    sample_rate_candidates: list = field(default_factory=list)
     # absolute - only when sample rate known
     sample_rate: Optional[float] = None
     carrier_offset_hz: Optional[float] = None
@@ -288,8 +297,15 @@ class InterleaverHypothesis:
     p_value: Optional[float] = None
     rank_profile: Optional[dict] = None   # {"L": [...], "deficiency": [...]}
 
+    @property
+    def label(self) -> str:
+        """Display name: the PS calls the helical interleaver 'diagonal'."""
+        return {"helical": "diagonal/helical",
+                "ieee80211": "802.11 bit interleaver"}.get(self.kind, self.kind)
+
     def to_dict(self) -> dict:
         d = dataclasses.asdict(self)
+        d["label"] = self.label
         if self.rank_profile and len(self.rank_profile.get("L", [])) > 512:
             d["rank_profile"] = {k: list(v)[:512] for k, v in self.rank_profile.items()}
         return d
