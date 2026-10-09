@@ -1,40 +1,46 @@
-# rf-analyzer
+# Dhwani
 
-Automated blind analysis of `.IQ` / `.WAV` SDR recordings. The system takes an
-unknown recording and works from raw RF samples to an analyst-readable
-interpretation:
+Dhwani is a blind analyser for off-air HF/VHF/UHF recordings that arrive
+as `.wav` or `.iq` with missing or inconsistent metadata. From raw
+samples it detects signals, estimates their parameters (sample-rate
+candidates, symbol rate, bandwidth, SNR), identifies and demodulates the
+modulation (PSK, QAM, FSK and more), removes the scrambler, identifies
+and undoes the interleaver (block, diagonal/helical, convolutional;
+pseudo-random by period), identifies and decodes the FEC (convolutional
+with Viterbi, Reed-Solomon, LDPC, RS+convolutional concatenated), splits
+header from payload by bit-stream correlation and CRC, and says what the
+payload is. Every value carries a confidence and the method that produced
+it; what cannot be determined is reported as unknown. It ships as a CLI,
+a PyQt6 GUI and a static web viewer.
 
+```mermaid
+flowchart LR
+  S0[S0 ingest<br/>wav / iq / SigMF] --> S1[S1 condition] --> S2[S2 CFAR detect<br/>cached]
+  S2 --> S3[S3 channelise] --> S4[S4 parameters] --> S5{S5 modulation<br/>cumulants + receiver trials<br/>CVNet advisory}
+  S5 -- UNKNOWN / OFDM --> stop1([stop])
+  S5 --> S6{S6 demodulate<br/>quality gate}
+  S6 -- FAILED / analog --> stop2([stop])
+  S6 --> S7[S7 ambiguity fan-out]
+  subgraph search [S8-S10 hypothesis beam]
+    direction LR
+    D[descramble] --> IL[de-interleave] --> FEC[FEC ID + decode<br/>+ RS outer pass] --> FR[framing + CRC]
+  end
+  S7 --> search --> S11[S11 payload intelligence<br/>capped by provenance] --> S12[S12 exports<br/>JSON CSV bin SigMF PDF GRC]
 ```
-recording (.iq / .wav)
-  -> format sniffing        (S0)
-  -> conditioning           (S1)
-  -> CFAR signal detection  (S2)
-  -> channelisation         (S3)
-  -> parameter estimation   (S4)
-  -> modulation ID          (S5, two engines + fusion)
-  -> demodulation           (S6, soft bits / LLRs)
-  -> ambiguity fan-out      (S7)
-  -> blind descrambling     (S7)
-  -> blind de-interleaving  (S8, GF(2) rank engine)
-  -> blind FEC ID + decode  (S9)
-  -> framing + CRC hunting  (S10)
-  -> report + exports       (S11)
-```
 
-The architecture is not a linear pipeline: stages S7-S10 run inside a
-hypothesis search with beam pruning, objective evidence scoring (GF(2)
-rank deficiency, FEC syndrome-zero rate, CRC pass rate) and early exit on
-a validated chain. Every reported number carries a confidence and the
-method that produced it; unknown things are reported as unknown.
+S7-S10 are a search, not a forward pass: candidate bit streams are
+pre-scored by GF(2) rank deficiency, the beam survivors go through
+descrambling, interleaver and FEC identification and framing, and a
+CRC-validated chain exits early.
 
 ## What it recovers, verified end to end
 
-The bundled regression test generates a QPSK signal with a CCSDS
+`python examples/demo.py` generates a QPSK signal with a CCSDS
 convolutional code (K=7, generators 171/133 octal), an 8x16 block
 interleaver, PN9 whitening, 96-bit frames with a sync word and
-CRC-16/CCITT, plus AWGN, carrier offset and phase offset, writes it to a
-raw `.iq` file, and the analyzer blindly recovers every element of that
-chain including the payload, in under 10 seconds.
+CRC-16/CCITT, plus AWGN, carrier and phase offset, writes it to a raw
+`.iq` file, analyses it blind and prints PASS/FAIL for every element of
+that chain (exit status 1 on any miss).
 
 ## Installation
 
@@ -55,7 +61,7 @@ Dependency groups (install only what you need):
 | (core)   | numpy, scipy                 | everything in S0-S10             |
 | `ml`     | torch, huggingface_hub       | CVNet-RF modulation engine       |
 | `gui`    | PyQt6, pyqtgraph             | desktop analyst GUI              |
-| `io`     | soundfile, sigmf             | awkward WAVs, SigMF helpers      |
+| `io`     | soundfile                    | 24-bit PCM WAVs                  |
 | `report` | reportlab                    | PDF export                       |
 | `fec`    | reedsolo                     | Reed-Solomon decode              |
 | `dev`    | pytest                       | test suite                       |
@@ -64,14 +70,17 @@ Dependency groups (install only what you need):
 
 The ML modulation engine uses the verified Hugging Face model
 `sohelimi/cvnet-rf` (trained on RadioML 2018.01A, 24 classes, input
-(2, 1024); the `real` variant reaches 54.4% validation accuracy averaged
-over -20..+30 dB SNR, which is why it is fused as an advisory engine, not
-an authority). Checkpoints download automatically on first use via
-`huggingface_hub`, or manually:
+(2, 1024); its model card reports 54.4% validation accuracy for the
+`real` variant averaged over -20..+30 dB SNR, which is why it is fused as
+an advisory engine, not an authority). Checkpoints download automatically on first use via
+`huggingface_hub`, pinned to a repo revision and SHA-256 (a mismatch
+raises), and are loaded with `weights_only=True` so a checkpoint cannot
+run code. Manual download (same pin):
 
 ```bash
 python -c "from huggingface_hub import hf_hub_download; \
   hf_hub_download('sohelimi/cvnet-rf', 'real_best.pt', \
+  revision='df32f6cd9bb033835465928307610bba1c376708', \
   local_dir='ml/cvnet_rf/checkpoints')"
 ```
 
@@ -83,39 +92,50 @@ cumulant engine covers the supported classes on its own.
 ## CLI
 
 ```bash
-rf-analyzer detect  recording.iq --sample-rate 2000000
-rf-analyzer classify recording.iq --sample-rate 2000000
-rf-analyzer analyze recording.iq --sample-rate 2000000 -o out/
-rf-analyzer analyze recording.wav                     # rate from WAV header
-rf-analyzer analyze recording.iq --modulation BPSK    # analyst override
-rf-analyzer report out/analysis.json -o out2/         # re-render exports
-rf-analyzer synth test.iq  --modulation QPSK --fec conv \
-    --interleaver block --scrambler pn9 --snr 20      # raw complex64 IQ
-rf-analyzer synth test.wav --sample-rate 1000000 \
-    --modulation QPSK --snr 25                        # stereo WAV (I/Q, f32)
-rf-analyzer synth test.sigmf --sample-rate 1000000 \
-    --centre-frequency 433920000 --modulation QPSK    # SigMF pair + truth
-rf-analyzer synth ldpc.iq --fec ldpc --snr 25         # LDPC-coded signal
-rf-analyzer signatures                                # signature library
+dhwani detect  recording.iq --sample-rate 2000000
+dhwani classify recording.iq --sample-rate 2000000
+dhwani analyze recording.iq --sample-rate 2000000 -o out/
+dhwani analyze recording.wav                     # rate from WAV header
+dhwani analyze recording.iq --modulation BPSK    # analyst override
+dhwani report out/analysis.json -o out2/         # re-render exports
+dhwani synth test.iq  --modulation QPSK --fec conv \
+    --interleaver block --scrambler pn9 --snr 20 # raw complex64 IQ
+dhwani synth test.wav --sample-rate 1000000 \
+    --modulation QPSK --snr 25                   # stereo WAV (I/Q, f32)
+dhwani synth test.sigmf --sample-rate 1000000 \
+    --centre-frequency 433920000 --modulation QPSK # SigMF pair + truth
+dhwani synth ldpc.iq --fec ldpc --snr 25         # LDPC-coded signal
+dhwani synth cat.iq --fec concat --frames 80      # RS outer + conv inner
+dhwani signatures                                # signature library
 ```
 
 For a headerless raw `.iq` file the sample rate is genuinely not
-recoverable from the data; without `--sample-rate` all frequencies are
-reported in normalised units (cycles/sample) and become absolute the
-moment you provide it.
+recoverable from the data. It is taken from `--sample-rate`, a SigMF
+sidecar, or a file name written by the recording software (GQRX
+`gqrx_..._<freq>_<rate>_fc.raw`, or tokens such as `2.4Msps` / `437.5MHz`,
+labelled source "filename"); otherwise it stays unknown, S4 lists PROBABLE
+candidates, and all frequencies are reported per recorded sample.
+
+A mono (single-channel) `.wav` is a real signal: it is converted to
+complex baseband (mixed by -fs/4, half-band filtered, decimated by 2), so
+the reported sample rate is fs/2 and the centre frequency is shifted by
+fs/4. Analysis runs on one 2^22-sample window: a longer file is scanned
+window by window (up to 16, about 67M samples) and the window with the
+strongest signal is analysed, or `--start-sample N` picks it; the span is
+recorded in `recording.analysed_start` / `analysed_samples`.
 
 ## GUI
 
 ```bash
-rf-analyzer-gui
+dhwani-gui
 ```
 
 Eight pages: Load and Inspect, Spectrum and Waterfall, Parameters,
 Modulation, Demodulation (constellation + eye diagram), Bit Layer (rank
 profile + hypothesis table), Frames and Payload (entropy field map + hex
 view), Report and Export. Analysis runs on a worker thread; any decision
-can be overridden and only downstream stages re-run (upstream results are
-cached).
+can be overridden, which re-runs the pipeline with the override pinned
+(only S2 detection is served from the cache).
 
 ## Web report viewer
 
@@ -124,26 +144,133 @@ for exported `analysis.json` reports: PSD, waterfall, constellation, eye
 diagram, rank profile, entropy field map, verdicts and payload hex, all
 rendered in the browser with no upload.
 
-## Tests and benchmarks
+## Tests and results
 
 ```bash
-pytest                            # 53 unit/integration/end-to-end tests
-python scripts/benchmark.py --big # performance table below
-python scripts/validate_matrix.py # ground-truth matrix, all modulations
-node web/test-node.js             # browser engine regression (4 cases)
+pytest                                # everything (about 2.5 minutes)
+python scripts/benchmark.py --big     # -> results/benchmark.json
+python scripts/validate_matrix.py     # -> results/validation_report.json
+python scripts/validate_bitlayer.py   # -> results/bitlayer_report.json
+python scripts/validate_offair.py     # -> results/offair_report.json
+python scripts/render_readme.py       # re-render the block below
+python web/make-test-fixtures.py && node web/test-node.js
 ```
 
-Measured on an Apple M5 (10 cores), all report targets are met:
+The numbers below are rendered from `results/*.json` by
+`scripts/render_readme.py`; each file records the machine, versions,
+commit and command that produced it. Do not edit this block by hand.
 
-| operation                                | measured | target   |
-|------------------------------------------|---------:|----------|
-| wideband detection (2M samples)           |   0.17 s | < 2 s    |
-| symbol-rate estimation                    |   0.05 s | 1-5 s    |
-| demodulation of 106k symbols              |   0.74 s | < 1 s    |
-| GF(2) rank scan L=2..512, 50k bits        |   0.79 s | 5-30 s   |
-| FEC identification                        |   0.85 s | 10-60 s  |
-| end-to-end, one clean signal (full stack) |   6.3 s  | < 90 s   |
-| 1 GB IQ file to first waterfall (memmap)  |   0.09 s | < 3 s    |
+<!-- results:begin -->
+### Speed (synthetic inputs)
+
+| operation | measured | design target |
+|---|---:|---|
+| wideband detection, 2M samples | 0.13 s | < 2 s |
+| symbol-rate estimation (cyclic periodogram) | 0.04 s | 1-5 s |
+| demodulation of 106100 symbols | 0.67 s | < 1 s per 100k |
+| GF(2) rank scan L=2..512, 50k bits | 0.68 s | 5-30 s |
+| FEC identification (conv sweep + decode) | 0.73 s | 10-60 s |
+| end-to-end, one clean signal (full stack) | 4.97 s | < 90 s |
+| 1 GB IQ file: load + first waterfall | 0.14 s | < 3 s |
+
+_Source: `results/benchmark.json` (synthetic (dhwani.synth.WaveformFactory)), commit `667e906`, Apple M1 Pro, Python 3.14.8, 2026-10-08T06:32:12Z._
+
+### Modulation ID and demodulation (synthetic)
+
+57 PASS, 10 DEGRADED, 6 FAIL of 73 cases.
+
+
+![Blind modulation ID top-1 accuracy per modulation, CFO 0.004 vs CFO 0](results/charts/modulation_top1.svg)
+
+| modulation | cases | blind top-1 | 95% CI | blind top-2 |
+|---|---:|---:|---:|---:|
+| BPSK | 2 | 50% | - | 100% |
+| BPSK (CFO 0) | 1 | 100% | - | 100% |
+| QPSK | 2 | 100% | - | 100% |
+| QPSK (CFO 0) | 1 | 100% | - | 100% |
+| OQPSK | 2 | 100% | - | 100% |
+| OQPSK (CFO 0) | 1 | 100% | - | 100% |
+| 8PSK | 2 | 100% | - | 100% |
+| 8PSK (CFO 0) | 1 | 100% | - | 100% |
+| 16PSK | 2 | 100% | - | 100% |
+| 16PSK (CFO 0) | 1 | 100% | - | 100% |
+| 32PSK | 2 | 100% | - | 100% |
+| 32PSK (CFO 0) | 1 | 100% | - | 100% |
+| OOK | 2 | 100% | - | 100% |
+| OOK (CFO 0) | 1 | 100% | - | 100% |
+| 4ASK | 2 | 100% | - | 100% |
+| 4ASK (CFO 0) | 1 | 100% | - | 100% |
+| 8ASK | 2 | 100% | - | 100% |
+| 8ASK (CFO 0) | 1 | 100% | - | 100% |
+| 16QAM | 2 | 100% | - | 100% |
+| 16QAM (CFO 0) | 1 | 100% | - | 100% |
+| 32QAM | 2 | 100% | - | 100% |
+| 32QAM (CFO 0) | 1 | 100% | - | 100% |
+| 64QAM | 2 | 100% | - | 100% |
+| 64QAM (CFO 0) | 1 | 100% | - | 100% |
+| 128QAM | 2 | 100% | - | 100% |
+| 128QAM (CFO 0) | 1 | 100% | - | 100% |
+| 256QAM | 2 | 50% | - | 100% |
+| 256QAM (CFO 0) | 1 | 0% | - | 0% |
+| 16APSK | 2 | 100% | - | 100% |
+| 16APSK (CFO 0) | 1 | 100% | - | 100% |
+| 32APSK | 2 | 100% | - | 100% |
+| 32APSK (CFO 0) | 1 | 100% | - | 100% |
+| 64APSK | 2 | 100% | - | 100% |
+| 64APSK (CFO 0) | 1 | 100% | - | 100% |
+| 128APSK | 2 | 100% | - | 100% |
+| 128APSK (CFO 0) | 1 | 100% | - | 100% |
+| 2FSK | 2 | 50% | - | 50% |
+| 2FSK (CFO 0) | 1 | 100% | - | 100% |
+| 2FSK (4 sps) | 1 | 100% | - | 100% |
+| 4FSK | 2 | 100% | - | 100% |
+| 4FSK (CFO 0) | 1 | 100% | - | 100% |
+| 4FSK (4 sps) | 1 | 100% | - | 100% |
+| GMSK | 2 | 50% | - | 50% |
+| GMSK (CFO 0) | 1 | 100% | - | 100% |
+| GMSK (4 sps) | 1 | 100% | - | 100% |
+| OFDM | 2 | 100% | - | 100% |
+| FM | 1 | 0% | - | 0% |
+| AM-DSB-WC | 1 | 0% | - | 0% |
+| AM-DSB-SC | 1 | 0% | - | 0% |
+| AM-SSB-WC | 1 | 0% | - | 0% |
+| AM-SSB-SC | 1 | 0% | - | 0% |
+
+_Source: `results/validation_report.json` (synthetic (dhwani.synth.WaveformFactory)), commit `b5c0379`, Apple M1 Pro, Python 3.14.8, 2026-10-08T01:50:29Z._
+
+### Interleaver and FEC identification (synthetic)
+
+
+![Bit-layer frames recovered per interleaver and FEC family](results/charts/bitlayer_grid.svg)
+
+| interleaver | cases | interleaver ID | FEC ID | CRC pass |
+|---|---:|---:|---:|---:|
+| none | 5 | 100% | 100% | 100% |
+| block | 5 | 20% | 40% | 20% |
+| helical | 5 | 20% | 40% | 20% |
+| convolutional | 5 | 20% | 40% | 20% |
+| pseudo_random | 5 | 20% | 20% | 0% |
+
+| FEC | cases | interleaver ID | FEC ID | CRC pass |
+|---|---:|---:|---:|---:|
+| none | 5 | 20% | 100% | 20% |
+| convolutional | 5 | 100% | 80% | 80% |
+| reed_solomon | 5 | 20% | 20% | 20% |
+| ldpc | 5 | 20% | 20% | 20% |
+| concatenated | 5 | 20% | 20% | 20% |
+
+_Source: `results/bitlayer_report.json` (synthetic (dhwani.synth.WaveformFactory)), commit `b5c0379`, Apple M1 Pro, Python 3.14.8, 2026-10-08T02:02:23Z._
+
+### Headerless sample-rate candidates (synthetic)
+
+True sample rate among the PROBABLE candidates (with a correct symbol rate) in 10 of 10 headerless files; symbol rate right in 10; 4.1 candidates on average; sample rate applied: never.
+
+_Source: `results/samplerate_report.json` (synthetic (dhwani.synth.WaveformFactory)), commit `30ac201`, Apple M1 Pro, Python 3.14.8, 2026-10-08T05:39:49Z._
+
+### Off-air recordings
+
+_No off-air results yet: every number above is synthetic. Add licensed recordings and run `python scripts/validate_offair.py`._
+<!-- results:end -->
 
 ## Supported modulations (S6 demodulation)
 
@@ -165,36 +292,8 @@ stops the pipeline instead of feeding the bit layer unreliable bits.
 
 `scripts/validate_matrix.py` measures every modulation against ground
 truth (blind classification, known-modulation BER, full blind chain with
-frames/CRC/payload trust) and writes `docs/validation_report.json` with a
-PASS/DEGRADED/FAIL verdict per case.
-
-Latest full run (49 cases: 27 modulations, two SNR points each for the
-digital set, full blind chain at the flagship SNR):
-
-```text
-43 PASS, 3 DEGRADED, 3 FAIL
-
-- all 21 digital modulations demodulate at BER 0.000-0.007 at their
-  family-appropriate SNR
-- blind classification names 26 of 27 modulations correctly at the
-  flagship SNR: S5 trial-demodulates its shortlist with the real S6
-  receiver and a candidate only wins if it LOCKS (EVM against its own
-  calibrated gate, constellation occupancy, residual-bias structure),
-  which eliminated the earlier name confusions among lookalike dense
-  constellations
-- 17 of 19 framed modulations complete the entire blind chain to a
-  CRC-validated payload (trust: VALIDATED PAYLOAD), and in 19 of 21
-  full-chain runs the extracted payload is byte-for-byte a contiguous
-  substring of the transmitted payload (the other 2 are the BER-limited
-  cases below, where the CRC gate correctly withholds trust)
-- the 3 DEGRADED are honesty, not errors: 128APSK at both SNRs decodes
-  at BER 0.000 but stays gated DEGRADED by its EVM margin, and 2FSK at
-  10 dB decodes at BER 0.000 with the classification withheld as
-  UNKNOWN rather than guessed
-- the 3 FAILs are physics at the SNR floor (256QAM at 31/37 dB with a
-  720-symbol burst, GMSK at 10 dB with BER 0.05), reported by the
-  quality gates rather than hidden
-```
+frames/CRC/payload trust) with a PASS/DEGRADED/FAIL verdict per case;
+see the results block above.
 
 ## Evidence gates and trust
 
@@ -222,32 +321,15 @@ capped. Reporting (JSON/CSV/PDF/SigMF/GRC) is stage S12 and includes the
 S11 section; the web viewer renders it with an animated stage-by-stage
 pipeline flow recorded by the engine.
 
-## Honest limitations
+## Limitations
 
-- Absolute sample rate of headerless raw IQ cannot be estimated; it is
-  reported unknown until the analyst pins it.
-- Encrypted payloads are reported as high-entropy with no recovery
-  attempted; that is a successful outcome, not a failure.
-- Blind FEC/interleaver identification degrades above roughly 5% raw BER
-  (fundamental to rank-based methods); improve demodulation first.
-- Blind classification of dense constellations near their SNR floor can
-  report a lookalike neighbour as a close second (256QAM vs 128QAM at a
-  matched EVM); the receiver-trial detail in the report shows both locks
-  and the analyst override recovers the full chain in those cases.
-- 128APSK carrier-coset resolution and 256QAM near their SNR floors gate
-  DEGRADED with an explicit ambiguity warning instead of guessing.
-- LDPC identification uses candidate-set matching (known H matrices,
-  deterministic seeds or loaded standards); reconstruction of an
-  arbitrary unknown H remains out of scope and is stated in the result.
-- Pseudo-random interleavers: the period is detected, the permutation is
-  reported unrecovered unless many aligned frames are available.
-- OFDM is detected with multi-evidence (CP correlation, symbol-period
-  recurrence, half-consistency, comb structure) and parameterised (FFT
-  size, CP length) but not demodulated to subcarrier bits.
-- DVB-length whiteners are phase-searched over a truncated window (512
-  phases of 32767) at interactive speed; the truncation is reported.
-- The GNU Radio `.grc` export targets GR 3.10 block ids and is generated
-  as a starting point; it is not executed or validated here.
+The full, current list is in [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
+The ones most likely to matter: only the first 2^22 samples are
+analysed; a headerless IQ file's sample rate stays unknown (S4 offers
+PROBABLE candidates only); dense PSK can false-lock on a carrier alias
+(then reported DEGRADED, not GOOD); pseudo-random interleaver
+permutations are not recovered; and every number above is synthetic
+until off-air recordings are scored.
 
 ## Technology decisions (verified, not assumed)
 
@@ -271,5 +353,8 @@ pipeline flow recorded by the engine.
 - **reedsolo** (RS decode), **sigmf**, **soundfile**, **reportlab**:
   verified and used.
 
-See `docs/ARCHITECTURE.md`, `docs/ALGORITHMS.md` and
-`docs/DEVELOPMENT.md` for the deep dives.
+Deep dives: [architecture](docs/ARCHITECTURE.md),
+[algorithms](docs/ALGORITHMS.md), [development](docs/DEVELOPMENT.md),
+[threat model](docs/THREAT_MODEL.md),
+[how the numbers are made](docs/BENCHMARK_METHOD.md),
+[limitations](docs/LIMITATIONS.md).
