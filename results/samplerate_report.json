@@ -1,0 +1,200 @@
+{
+  "provenance": {
+    "generated_utc": "2026-10-08T05:39:49Z",
+    "command": "validate_samplerate.py",
+    "git_commit": "30ac201",
+    "git_dirty": false,
+    "cpu": "Apple M1 Pro",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "python": "3.14.8",
+    "numpy": "2.5.3",
+    "scipy": "1.18.1",
+    "data": "synthetic (dhwani.synth.WaveformFactory)"
+  },
+  "settings": {
+    "modulation": "QPSK",
+    "snr_db": 20.0,
+    "seed": 3,
+    "headerless": true
+  },
+  "summary": {
+    "cases": 10,
+    "symbol_rate_ok": 10,
+    "true_rate_found": 10,
+    "mean_candidates": 4.1,
+    "sample_rate_ever_applied": false
+  },
+  "cases": [
+    {
+      "sample_rate_hz": 48000.0,
+      "baud": 1200,
+      "sps": 40.0,
+      "seed": 3,
+      "reported_sample_rate": null,
+      "candidates": [
+        48000.0,
+        96000.0,
+        192000.0,
+        2000000.0,
+        10000000.0,
+        20000000.0
+      ],
+      "n_candidates": 6,
+      "symbol_rate_ok": true,
+      "symbol_rate_rel_error": 4e-05,
+      "true_rate_found": true
+    },
+    {
+      "sample_rate_hz": 48000.0,
+      "baud": 4800,
+      "sps": 10.0,
+      "seed": 3,
+      "reported_sample_rate": null,
+      "candidates": [
+        48000.0,
+        96000.0,
+        192000.0,
+        1000000.0,
+        10000000.0
+      ],
+      "n_candidates": 5,
+      "symbol_rate_ok": true,
+      "symbol_rate_rel_error": 7e-05,
+      "true_rate_found": true
+    },
+    {
+      "sample_rate_hz": 48000.0,
+      "baud": 9600,
+      "sps": 5.0,
+      "seed": 3,
+      "reported_sample_rate": null,
+      "candidates": [
+        48000.0,
+        96000.0,
+        192000.0,
+        250000.0
+      ],
+      "n_candidates": 4,
+      "symbol_rate_ok": true,
+      "symbol_rate_rel_error": 7e-05,
+      "true_rate_found": true
+    },
+    {
+      "sample_rate_hz": 96000.0,
+      "baud": 9600,
+      "sps": 10.0,
+      "seed": 3,
+      "reported_sample_rate": null,
+      "candidates": [
+        48000.0,
+        96000.0,
+        192000.0,
+        1000000.0,
+        10000000.0
+      ],
+      "n_candidates": 5,
+      "symbol_rate_ok": true,
+      "symbol_rate_rel_error": 7e-05,
+      "true_rate_found": true
+    },
+    {
+      "sample_rate_hz": 192000.0,
+      "baud": 38400,
+      "sps": 5.0,
+      "seed": 3,
+      "reported_sample_rate": null,
+      "candidates": [
+        48000.0,
+        96000.0,
+        192000.0,
+        250000.0
+      ],
+      "n_candidates": 4,
+      "symbol_rate_ok": true,
+      "symbol_rate_rel_error": 7e-05,
+      "true_rate_found": true
+    },
+    {
+      "sample_rate_hz": 250000.0,
+      "baud": 50000.0,
+      "sps": 5.0,
+      "seed": 3,
+      "reported_sample_rate": null,
+      "candidates": [
+        48000.0,
+        96000.0,
+        192000.0,
+        250000.0
+      ],
+      "n_candidates": 4,
+      "symbol_rate_ok": true,
+      "symbol_rate_rel_error": 7e-05,
+      "true_rate_found": true
+    },
+    {
+      "sample_rate_hz": 1000000.0,
+      "baud": 125000.0,
+      "sps": 8.0,
+      "seed": 3,
+      "reported_sample_rate": null,
+      "candidates": [
+        1000000.0,
+        2000000.0,
+        8000000.0
+      ],
+      "n_candidates": 3,
+      "symbol_rate_ok": true,
+      "symbol_rate_rel_error": 9e-05,
+      "true_rate_found": true
+    },
+    {
+      "sample_rate_hz": 2400000.0,
+      "baud": 250000.0,
+      "sps": 9.6,
+      "seed": 3,
+      "reported_sample_rate": null,
+      "candidates": [
+        1200000.0,
+        2400000.0
+      ],
+      "n_candidates": 2,
+      "symbol_rate_ok": true,
+      "symbol_rate_rel_error": 7e-05,
+      "true_rate_found": true
+    },
+    {
+      "sample_rate_hz": 2000000.0,
+      "baud": 270833,
+      "sps": 7.385,
+      "seed": 3,
+      "reported_sample_rate": null,
+      "candidates": [
+        2000000.0
+      ],
+      "n_candidates": 1,
+      "symbol_rate_ok": true,
+      "symbol_rate_rel_error": 8e-05,
+      "true_rate_found": true
+    },
+    {
+      "sample_rate_hz": 20000000.0,
+      "baud": 1000000.0,
+      "sps": 20.0,
+      "seed": 3,
+      "reported_sample_rate": null,
+      "candidates": [
+        48000.0,
+        96000.0,
+        192000.0,
+        1000000.0,
+        2000000.0,
+        10000000.0,
+        20000000.0
+      ],
+      "n_candidates": 7,
+      "symbol_rate_ok": true,
+      "symbol_rate_rel_error": 9e-05,
+      "true_rate_found": true
+    }
+  ]
+}

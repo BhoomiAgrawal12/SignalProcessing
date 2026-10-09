@@ -6,10 +6,10 @@ import logging
 import numpy as np
 import pytest
 
-from rfanalyzer.ingestion import load_recording
-from rfanalyzer.pipeline import RFAnalyzer
-from rfanalyzer.synth.factory import WaveformFactory
-from rfanalyzer.synth.writers import write_iq, write_wav, write_sigmf
+from dhwani.ingestion import load_recording
+from dhwani.pipeline import Analyzer
+from dhwani.synth.factory import WaveformFactory
+from dhwani.synth.writers import write_iq, write_wav, write_sigmf
 
 logging.disable(logging.INFO)
 
@@ -58,7 +58,7 @@ def test_sigmf_roundtrip(tmp_path, signal):
     assert meta["global"]["core:datatype"] == "cf32_le"
     assert meta["global"]["core:sample_rate"] == 1e6
     assert meta["captures"][0]["core:frequency"] == 433.92e6
-    assert meta["global"]["rfanalyzer:ground_truth"]["modulation"] == "QPSK"
+    assert meta["global"]["dhwani:ground_truth"]["modulation"] == "QPSK"
     rec = load_recording(out["data"])
     assert rec.sample_rate == 1e6
     assert rec.center_frequency == 433.92e6
@@ -77,7 +77,7 @@ def test_full_e2e_through_wav(tmp_path, config):
         n_frames=80)
     p = str(tmp_path / "full.wav")
     write_wav(iq, gt, p, sample_rate=1e6)
-    res = RFAnalyzer(config, use_cache=False).analyze(p)
+    res = Analyzer(config, use_cache=False).analyze(p)
     assert res.recording_meta["sample_rate"] == 1e6
     assert res.modulation.prediction == "QPSK"
     assert res.fec.family == "convolutional"
@@ -95,7 +95,17 @@ def test_e2e_ldpc(tmp_path, config):
                           n_frames=80)
     p = str(tmp_path / "ldpc.iq")
     iq.astype(np.complex64).tofile(p)
-    res = RFAnalyzer(config, use_cache=False).analyze(p, sample_rate=1e6)
+    res = Analyzer(config, use_cache=False).analyze(p, sample_rate=1e6)
     assert res.fec is not None and res.fec.family == "ldpc"
     assert res.fec.parameters["n"] == 256
     assert res.fec.syndrome_zero_rate > 0.9
+
+
+def test_drift_and_interferer_impairments():
+    """R6: the two impairments added for the realism axis do what they say."""
+    from dhwani.synth import impairments as imp
+    x = np.ones(20000, dtype=np.complex128)
+    f = np.diff(np.unwrap(np.angle(imp.cfo_drift(x, 0.01)))) / (2 * np.pi)
+    assert abs(f[0]) < 1e-5 and abs(f[-1] - 0.01) < 1e-4
+    y = imp.cw_interferer(x, 0.2, -10.0) - x
+    assert abs(10 * np.log10((np.abs(y) ** 2).mean()) + 10.0) < 0.01

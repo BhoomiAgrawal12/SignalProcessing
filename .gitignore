@@ -7,10 +7,12 @@ __pycache__/
 examples/*.iq
 examples/out/
 ml/cvnet_rf/checkpoints/
-ml/cvnet_rf/upstream/.cache/
 .DS_Store
 .vercel
 .env*
 examples/demo_result.json
 examples/demo_signal.iq
 examples/webtest/
+data/offair/*
+!data/offair/manifest.json
+CLAUDE.md

@@ -1,8 +1,9 @@
-"""Measured performance against the report's targets (section 10).
+"""Stage timings on synthetic inputs -> results/benchmark.json.
 
 Run:  python scripts/benchmark.py [--big]
 --big also generates a 1 GB IQ file in a temp dir to time the memmap and
-first-waterfall path (needs ~1 GB free disk).
+first-waterfall path (needs ~1 GB free disk). The targets are the
+original design budgets, kept for comparison.
 """
 import argparse
 import os
@@ -14,16 +15,16 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from rfanalyzer.common.config import Config
-from rfanalyzer.conditioning import condition
-from rfanalyzer.detection import detect_signals, compute_waterfall
-from rfanalyzer.demod import demodulate
-from rfanalyzer.fec.detect import identify_fec
-from rfanalyzer.gf2.rank import rank_profile
-from rfanalyzer.ingestion import load_recording
-from rfanalyzer.params.estimators import symbol_rate
-from rfanalyzer.pipeline import RFAnalyzer
-from rfanalyzer.synth.factory import WaveformFactory
+from dhwani.common.config import Config
+from dhwani.detection import detect_signals, compute_waterfall
+from dhwani.demod import demodulate
+from dhwani.fec.detect import identify_fec
+from dhwani.gf2.rank import rank_profile
+from dhwani.ingestion import load_recording
+from dhwani.params.estimators import symbol_rate
+from dhwani.pipeline import Analyzer
+from dhwani.synth.factory import WaveformFactory
+from provenance import write_result
 
 
 def t(fn, *a, **k):
@@ -37,6 +38,7 @@ def main():
     ap.add_argument("--big", action="store_true")
     args = ap.parse_args()
     cfg = Config()
+    cfg.modulation.cvnet_enabled = False    # no network, deterministic
     fac = WaveformFactory(seed=3)
     results = []
 
@@ -65,7 +67,7 @@ def main():
     results.append(("GF(2) rank scan L=2..512, 50k bits", dt, "5-30 s"))
 
     # FEC identification
-    from rfanalyzer.fec.conv import ConvCode, conv_encode
+    from dhwani.fec.conv import ConvCode, conv_encode
     coded = conv_encode(rng.integers(0, 2, 40000).astype(np.uint8),
                         ConvCode(7, (0o171, 0o133)), terminate=False)
     _, dt = t(identify_fec, coded, cfg.fec)
@@ -81,7 +83,7 @@ def main():
     with tempfile.TemporaryDirectory() as td:
         p = os.path.join(td, "bench.iq")
         iq.astype(np.complex64).tofile(p)
-        an = RFAnalyzer(cfg, use_cache=False)
+        an = Analyzer(cfg, use_cache=False)
         _, dt = t(an.analyze, p, 1e6)
     results.append(("end-to-end, one clean signal (full stack)", dt, "< 90 s"))
 
@@ -95,7 +97,7 @@ def main():
                     block.tofile(f)
             t0 = time.perf_counter()
             rec = load_recording(p, sample_rate=2e6, datatype="complex64")
-            wf = compute_waterfall(rec.samples)
+            compute_waterfall(rec.samples)
             dt = time.perf_counter() - t0
             results.append(("1 GB IQ file: load + first waterfall", dt, "< 3 s"))
 
@@ -103,6 +105,11 @@ def main():
     print("-" * 84)
     for name, dt, target in results:
         print(f"{name:52s} {dt:9.2f}s   {target}")
+    path = write_result("benchmark", {
+        "settings": {"big": args.big, "cvnet": cfg.modulation.cvnet_enabled},
+        "timings": [{"operation": n, "seconds": round(dt, 3), "target": tg}
+                    for n, dt, tg in results]})
+    print("results:", path)
 
 
 if __name__ == "__main__":

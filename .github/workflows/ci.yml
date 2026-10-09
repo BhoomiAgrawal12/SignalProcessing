@@ -1,0 +1,25 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: pip install -e ".[dev,fec,report]"
+      - name: pytest (whole suite, ~2.5 min)
+        run: pytest
+      - name: browser engine (S0-S5) and viewer escaping
+        run: python web/make-test-fixtures.py && node web/test-node.js
+      - name: README results block matches results/*.json
+        run: python scripts/render_readme.py --check

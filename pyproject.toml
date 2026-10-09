@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rf-analyzer"
+name = "dhwani"
 version = "0.1.0"
 description = "Automated blind analysis of .IQ/.WAV SDR recordings: detection, parameter estimation, modulation classification, demodulation, and blind bit-layer reconstruction (interleaver/FEC/frame/CRC identification)."
 requires-python = ">=3.11"
@@ -14,16 +14,16 @@ dependencies = [
 
 [project.optional-dependencies]
 ml = ["torch>=2.1", "huggingface_hub>=0.20"]
-gui = ["PyQt6>=6.6", "pyqtgraph>=0.13"]
-io = ["soundfile>=0.12", "sigmf>=1.2"]
+gui = ["PyQt6>=6.6", "pyqtgraph>=0.13", "pytest-qt>=4.4"]
+io = ["soundfile>=0.12"]
 report = ["reportlab>=4.0"]
 fec = ["reedsolo>=1.7"]
 dev = ["pytest>=7.4"]
-all = ["rf-analyzer[ml,gui,io,report,fec,dev]"]
+all = ["dhwani[ml,gui,io,report,fec,dev]"]
 
 [project.scripts]
-rf-analyzer = "rfanalyzer.cli:main"
-rf-analyzer-gui = "rfanalyzer.gui.app:main"
+dhwani = "dhwani.cli:main"
+dhwani-gui = "dhwani.gui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

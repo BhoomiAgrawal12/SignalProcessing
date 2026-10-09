@@ -1,0 +1,55 @@
+{
+  "provenance": {
+    "generated_utc": "2026-10-08T06:32:12Z",
+    "command": "benchmark.py --big",
+    "git_commit": "667e906",
+    "git_dirty": false,
+    "cpu": "Apple M1 Pro",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "python": "3.14.8",
+    "numpy": "2.5.3",
+    "scipy": "1.18.1",
+    "data": "synthetic (dhwani.synth.WaveformFactory)"
+  },
+  "settings": {
+    "big": true,
+    "cvnet": false
+  },
+  "timings": [
+    {
+      "operation": "wideband detection, 2M samples",
+      "seconds": 0.133,
+      "target": "< 2 s"
+    },
+    {
+      "operation": "symbol-rate estimation (cyclic periodogram)",
+      "seconds": 0.045,
+      "target": "1-5 s"
+    },
+    {
+      "operation": "demodulation of 106100 symbols",
+      "seconds": 0.669,
+      "target": "< 1 s per 100k"
+    },
+    {
+      "operation": "GF(2) rank scan L=2..512, 50k bits",
+      "seconds": 0.684,
+      "target": "5-30 s"
+    },
+    {
+      "operation": "FEC identification (conv sweep + decode)",
+      "seconds": 0.731,
+      "target": "10-60 s"
+    },
+    {
+      "operation": "end-to-end, one clean signal (full stack)",
+      "seconds": 4.97,
+      "target": "< 90 s"
+    },
+    {
+      "operation": "1 GB IQ file: load + first waterfall",
+      "seconds": 0.137,
+      "target": "< 3 s"
+    }
+  ]
+}
