@@ -1,9 +1,6 @@
-import os
-
 import numpy as np
 
-from rfanalyzer.ingestion import load_recording, sniff_raw_iq
-from rfanalyzer.ingestion.wav import read_wav
+from dhwani.ingestion import load_recording, sniff_raw_iq
 
 
 def _tone(n=20000, f=0.1):
@@ -66,3 +63,61 @@ def test_sigmf_sidecar(tmp_path):
     rec = load_recording(p)
     assert rec.sample_rate == 250000.0
     assert rec.center_frequency == 14.1e6
+
+
+def test_wav_mono_real_is_made_analytic(tmp_path, config):
+    """1.A: a real-valued mono WAV must not reach CFAR with a mirrored image."""
+    import scipy.io.wavfile as wavfile
+    from dhwani.conditioning import condition
+    from dhwani.detection import detect_signals
+    rng = np.random.default_rng(3)
+    n, sps = 1 << 17, 32
+    bits = rng.integers(0, 2, n // sps + 1).repeat(sps)[:n]
+    f = 0.15 + 0.01 * (2 * bits - 1)                      # real 2FSK burst
+    x = np.cos(2 * np.pi * np.cumsum(f)) + 0.1 * rng.normal(size=n)
+    p = str(tmp_path / "mono.wav")
+    wavfile.write(p, 48000, x.astype(np.float32))
+    rec = load_recording(p)
+    assert rec.channels == 1
+    assert any("complex baseband" in w for w in rec.warnings)
+    assert rec.sample_rate == 24000 and rec.center_frequency == 12000
+    segs, _ = detect_signals(condition(rec.samples)[0], config.cfar,
+                             sample_rate=rec.sample_rate)
+    top = max(segs, key=lambda s: s.snr_db)
+    # 0.15*fs real -> (0.15 - 0.25) / 0.5 = -0.2 of the new rate, i.e.
+    # centre frequency 12 kHz + offset -4.8 kHz = 7.2 kHz = 0.15 * 48 kHz
+    assert abs(top.center_norm + 0.2) < 0.02
+    assert abs(rec.center_frequency + top.absolute("center") - 7200) < 500
+    # no mirrored image of comparable power anywhere else in the band
+    # (FSK sidelobes still yield weak extra CFAR segments, as for IQ input)
+    strong = [s for s in segs if s.snr_db > top.snr_db - 10]
+    assert all(abs(s.center_norm + 0.2) < 0.1 for s in strong)
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("name,rate,cf", [
+    ("gqrx_20231010_153045_145800000_2400000_fc.raw", 2.4e6, 145.8e6),
+    ("pass_2.048Msps_437.5MHz.iq", 2.048e6, 437.5e6),
+    ("capture_250ksps.cfile", 250e3, None),
+    ("capture.iq", None, None),
+])
+def test_rate_from_filename(tmp_path, name, rate, cf):
+    """R4: recording software writes the sample rate / frequency into the
+    file name; it is used (labelled 'filename') when nothing better exists."""
+    p = str(tmp_path / name)
+    _tone().tofile(p)
+    rec = load_recording(p, datatype="complex64")
+    assert rec.sample_rate == rate
+    assert rec.center_frequency == cf
+    if rate:
+        assert rec.sample_rate_source == "filename"
+        assert any("file name" in w for w in rec.warnings)
+
+
+def test_user_rate_beats_filename(tmp_path):
+    p = str(tmp_path / "x_2400000sps.iq")
+    _tone().tofile(p)
+    rec = load_recording(p, sample_rate=1e6, datatype="complex64")
+    assert (rec.sample_rate, rec.sample_rate_source) == (1e6, "user")
