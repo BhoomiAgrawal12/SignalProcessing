@@ -44,7 +44,7 @@ that chain (exit status 1 on any miss).
 
 The same chain ships as `web/demo/demo_chain.wav` (stereo 16-bit I/Q, 1 MS/s
 in the header, synthetic): the "Load demo" button in `dhwani-gui` runs the full S0-S12 chain on it,
-`web/analyze.html` has a matching button for the browser S0-S5 preview, and
+you can drop the file on `web/analyze.html` for the browser S0-S5 preview, and
 `web/viewer.html?demo=1` shows its analysis.
 
 ## Installation
