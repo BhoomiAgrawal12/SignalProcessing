@@ -1,6 +1,6 @@
 """Stage S4: physical parameter estimation.
 
-Tiered strategy (report §13): cheap estimators first (spectral line, OBW,
+Tiered strategy: cheap estimators first (spectral line, OBW,
 M2M4), then a time-smoothed cyclic periodogram sweep for symbol rate
 confirmation. Every estimate carries a confidence and its method name.
 """
@@ -46,17 +46,13 @@ def occupied_bandwidth(x: np.ndarray, fraction: float = 0.99) -> dict:
             "psd_freq": f, "psd": 10 * np.log10(p + 1e-20)}
 
 
-def m2m4_snr(x: np.ndarray, kurtosis_signal: float = 1.0) -> float:
-    """Moment-based blind SNR estimate (GNU Radio snr_est_m2m4 form).
-
-    kurtosis_signal=1.0 assumes a constant-modulus signal (PSK); QAM is
-    slightly underestimated - acceptable for a blind first pass."""
+def m2m4_snr(x: np.ndarray) -> float:
+    """Moment-based blind SNR estimate (GNU Radio snr_est_m2m4 form) for a
+    constant-modulus signal (signal kurtosis 1); QAM is slightly
+    underestimated - acceptable for a blind first pass."""
     x = x[: 1 << 20]
     m2 = float((np.abs(x) ** 2).mean())
     m4 = float((np.abs(x) ** 4).mean())
-    ka, kw = kurtosis_signal, 2.0
-    dis = (ka + kw - 4) * m2 * m2 + m4 * (4 - ka - kw) - \
-        (4 - 2 * kw) * (m4 - m2 * m2) if False else 0
     # standard M2M4 for ka=1 (CM signal), kw=2 (complex Gaussian noise):
     inner = 2 * m2 * m2 - m4
     if inner <= 0:
@@ -178,7 +174,10 @@ def fsk_tones(x: np.ndarray, max_tones: int = 8) -> dict:
         hist_s = sig.medfilt(hist.astype(float), 5)
         peaks, _ = sig.find_peaks(hist_s, height=0.25 * hist_s.max(),
                                   distance=8)
-        if not (2 <= len(peaks) <= max_tones):
+        # rank only windows that resolve a valid M-FSK tone count: a window
+        # longer than the symbol (w >= sps) merges neighbouring symbols
+        # into spurious intermediate peaks
+        if len(peaks) not in (2, 4, 8) or len(peaks) > max_tones:
             continue
         width = max(2, len(hist_s) // (4 * len(peaks)))
         in_peak = np.zeros(len(hist_s), dtype=bool)
@@ -190,7 +189,7 @@ def fsk_tones(x: np.ndarray, max_tones: int = 8) -> dict:
                 "centers": centers, "hist": hist_s, "edges": edges, "w": w}
         if best is None or frac > best["frac"]:
             best = cand
-    if best is None or best["n_tones"] not in (2, 4, 8) or best["frac"] < 0.5:
+    if best is None or best["frac"] < 0.5:
         return {"is_fsk": False, "amplitude_cv": cv,
                 "note": "constant envelope but no clean tone structure"}
     centers = np.sort(best["centers"])
@@ -315,8 +314,35 @@ def ofdm_detect(x: np.ndarray, fft_sizes=(64, 128, 256, 512, 1024, 2048)) -> dic
 
 
 # --------------------------------------------------------------------------
-def estimate_parameters(x: np.ndarray, config, sample_rate=None,
-                        rate_ratio: float = 1.0) -> SignalParameters:
+# ponytail: small fixed tables, extend when an off-air capture misses
+SDR_SAMPLE_RATES = (48e3, 96e3, 192e3, 250e3, 1e6, 1.024e6, 1.2e6, 1.92e6,
+                    2e6, 2.048e6, 2.4e6, 2.56e6, 3.2e6, 8e6, 10e6, 20e6)
+STANDARD_SYMBOL_RATES = (300, 600, 1200, 2400, 4800, 9600, 19200, 38400,
+                         57600, 76800, 115200, 50e3, 100e3, 125e3, 250e3,
+                         270833, 500e3, 1e6)
+
+
+def sample_rate_candidates(symbols_per_sample: float,
+                           tol: float = 0.005) -> list:
+    """Headerless IQ: the common SDR sample rates at which the measured
+    symbol rate (per *recorded* sample) lands within `tol` of a standard
+    baud rate. Several usually match (rates come in powers of two), so
+    these are PROBABLE candidates with evidence, never the sample rate."""
+    out = []
+    for fs in SDR_SAMPLE_RATES:
+        rs = symbols_per_sample * fs
+        std = min(STANDARD_SYMBOL_RATES, key=lambda s: abs(rs - s) / s)
+        err = abs(rs - std) / std
+        if err <= tol:
+            out.append({"sample_rate_hz": fs, "symbol_rate_hz": round(rs, 1),
+                        "standard_symbol_rate": std,
+                        "rel_error": round(err, 5), "verdict": "PROBABLE",
+                        "method": "measured symbol rate equals a standard "
+                                  "baud rate at a common SDR sample rate"})
+    return sorted(out, key=lambda c: c["rel_error"])
+
+
+def estimate_parameters(x: np.ndarray, config, sample_rate=None) -> SignalParameters:
     """Run the full S4 battery on a channelised baseband signal."""
     p = SignalParameters(sample_rate=sample_rate)
 
