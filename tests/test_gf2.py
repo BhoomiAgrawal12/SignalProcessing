@@ -1,7 +1,7 @@
 import numpy as np
 
-from rfanalyzer.bits.packing import pack_bits, unpack_bits, pack_rows, popcount_u64
-from rfanalyzer.gf2.rank import gf2_rank_bits, rank_profile
+from dhwani.bits.packing import pack_bits, unpack_bits, pack_rows, popcount_u64
+from dhwani.gf2.rank import gf2_rank_bits, rank_profile
 
 
 def test_pack_roundtrip(rng):
