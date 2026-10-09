@@ -1,4 +1,4 @@
-"""Automatic format sniffing for headerless raw .iq files (report S0).
+"""Automatic format sniffing for headerless raw .iq files (stage S0).
 
 Tests, in order: file-size divisibility, per-dtype value histograms,
 endianness plausibility, real-vs-complex spectral symmetry.  Produces a
@@ -136,7 +136,6 @@ def sniff_raw_iq(path: str) -> list:
     results.sort(key=lambda r: -r["confidence"])
     if results:
         # normalise confidences to a distribution-ish scale
-        top = results[0]["confidence"] or 1.0
         rel = [r["confidence"] for r in results]
         s = sum(rel) or 1.0
         for r in results:

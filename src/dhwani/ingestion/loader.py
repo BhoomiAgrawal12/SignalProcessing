@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 import numpy as np
 
@@ -40,6 +41,30 @@ def _raw_iq_to_complex(path: str, dtype: str, endian: str,
         elif dtype == "int16":
             seg = seg / 32768.0
         out[s // 2:e // 2] = seg[0::2] + 1j * seg[1::2]
+    return out
+
+
+_SCALE = {"": 1.0, "k": 1e3, "m": 1e6, "g": 1e9}
+
+
+def meta_from_filename(path: str) -> dict:
+    """Sample rate / centre frequency written into the file name by the
+    recording software: GQRX `gqrx_<date>_<time>_<freqHz>_<rateHz>_fc.raw`,
+    or tokens such as `2.4Msps` / `250ksps` and `437.5MHz`. Only explicit
+    unit-bearing tokens are read; nothing is inferred from bare numbers."""
+    name = os.path.basename(path)
+    out = {}
+    m = re.search(r"gqrx_\d{8}_\d{6}_(\d+)_(\d+)_fc", name)
+    if m:
+        return {"center_frequency": float(m.group(1)),
+                "sample_rate": float(m.group(2))}
+    m = re.search(r"(?<![\d.])(\d+(?:\.\d+)?)\s*([kKmMgG]?)(?:sps|S/s|Sa/s)",
+                  name)
+    if m:
+        out["sample_rate"] = float(m.group(1)) * _SCALE[m.group(2).lower()]
+    m = re.search(r"(?<![\d.])(\d+(?:\.\d+)?)\s*([kKmMgG]?)Hz", name)
+    if m:
+        out["center_frequency"] = float(m.group(1)) * _SCALE[m.group(2).lower()]
     return out
 
 
@@ -82,17 +107,25 @@ def load_recording(path: str, sample_rate: float = None,
     if ext == ".wav":
         meta = read_wav(path)
         samples, is_real = wav_to_complex(meta)
+        sr = sample_rate or meta["sample_rate"]
+        cf = center_frequency or meta.get("center_frequency")
+        cf_source = ("user" if center_frequency else
+                     "auxi_chunk" if meta.get("center_frequency") else "unknown")
         if is_real:
-            warnings.append("single-channel WAV: treated as real signal "
-                            "(analytic conversion applied downstream)")
+            # real_to_complex halved the rate and centred the 0..fs/2 band
+            sr /= 2
+            cf = (cf or 0.0) + sr / 2
+            cf_source = ("real-to-complex shift fs/4" if cf_source == "unknown"
+                         else cf_source + " + fs/4 shift")
+            warnings.append("single-channel WAV: real signal converted to "
+                            "complex baseband (mixed by -fs/4, half-band "
+                            "filtered, decimated by 2); sample rate is fs/2 "
+                            "and the centre frequency is shifted by fs/4")
         return Recording(
             file_path=path, format="wav", samples=samples,
-            sample_rate=sample_rate or meta["sample_rate"],
+            sample_rate=sr,
             sample_rate_source="user" if sample_rate else "wav_header",
-            center_frequency=center_frequency or meta.get("center_frequency"),
-            center_frequency_source=("user" if center_frequency else
-                                     "auxi_chunk" if meta.get("center_frequency")
-                                     else "unknown"),
+            center_frequency=cf, center_frequency_source=cf_source,
             datatype=meta.get("datatype", ""), endianness="little",
             channels=meta.get("channels", 1),
             timestamp=meta.get("timestamp"), warnings=warnings)
@@ -117,6 +150,18 @@ def load_recording(path: str, sample_rate: float = None,
     samples = _raw_iq_to_complex(path, chosen["dtype"], chosen.get("endian", "little"))
     sr = sample_rate or sig_meta.get("sample_rate")
     cf = center_frequency or sig_meta.get("center_frequency")
+    from_name = meta_from_filename(path)
+    sr_source = ("user" if sample_rate else
+                 "sigmf" if sig_meta.get("sample_rate") else "unknown")
+    cf_source = ("user" if center_frequency else
+                 "sigmf" if sig_meta.get("center_frequency") else "unknown")
+    if sr is None and from_name.get("sample_rate"):
+        sr, sr_source = from_name["sample_rate"], "filename"
+        warnings.append(f"sample rate {sr:,.0f} Hz read from the file name "
+                        "(recording-software convention, not measured); "
+                        "pass --sample-rate to override")
+    if cf is None and from_name.get("center_frequency"):
+        cf, cf_source = from_name["center_frequency"], "filename"
     if sr is None:
         warnings.append("sample rate unknown (headerless raw IQ): all "
                         "frequencies reported in normalised units; set "
@@ -124,11 +169,8 @@ def load_recording(path: str, sample_rate: float = None,
     return Recording(
         file_path=path, format="sigmf" if sig_meta else "raw_iq",
         samples=samples, sample_rate=sr,
-        sample_rate_source=("user" if sample_rate else
-                            "sigmf" if sig_meta.get("sample_rate") else "unknown"),
-        center_frequency=cf,
-        center_frequency_source=("user" if center_frequency else
-                                 "sigmf" if sig_meta.get("center_frequency") else "unknown"),
+        sample_rate_source=sr_source,
+        center_frequency=cf, center_frequency_source=cf_source,
         datatype=chosen["dtype"], endianness=chosen.get("endian", "little"),
         format_confidence=chosen.get("confidence", 1.0),
         sniff_report={"candidates": sniff[:5]} if sniff else {},

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import os
 import struct
-from typing import Optional
 
 import numpy as np
 
@@ -103,15 +102,26 @@ def read_wav(path: str) -> dict:
 def wav_to_complex(meta: dict) -> tuple:
     """Convert WAV channel data to complex64 baseband.
 
-    2 channels -> I + jQ.  1 channel -> real signal (caller may Hilbert).
-    Returns (samples, is_real)."""
+    2 channels -> I + jQ.  1 channel -> real_to_complex (rate halves, centre
+    moves to fs/4; the caller adjusts the metadata). Returns (samples, is_real)."""
     raw = meta["raw"]
     if raw.ndim == 2 and raw.shape[1] >= 2:
         i = _norm(raw[:, 0])
         q = _norm(raw[:, 1])
         return (i + 1j * q).astype(np.complex64), False
-    x = _norm(raw.ravel())
-    return x.astype(np.complex64), True
+    return real_to_complex(_norm(raw.ravel())), True
+
+
+def real_to_complex(x: np.ndarray) -> np.ndarray:
+    """Real signal at fs -> complex baseband at fs/2: mix by -fs/4 so the
+    0..fs/2 band sits around DC, half-band low-pass to drop the mirrored
+    image, decimate by 2. The band fills the output, so CFAR never sees an
+    empty half-spectrum. web/analyze.js realToComplex is the same filter."""
+    from scipy.signal import firwin
+    mix = np.array([1, -1j, -1, 1j], dtype=np.complex64)
+    y = x.astype(np.float32) * mix[np.arange(len(x)) % 4]
+    y = np.convolve(y, firwin(63, 0.5), mode="same")[::2]
+    return y.astype(np.complex64)
 
 
 def _norm(x: np.ndarray) -> np.ndarray:
