@@ -1,4 +1,4 @@
-"""RFAnalyzer: the single analysis engine behind the CLI and the GUI.
+"""Analyzer: the single analysis engine behind the CLI and the GUI.
 
 Runs S0..S11 with stage caching, analyst overrides and honest uncertainty
 propagation. Overrides re-run only downstream stages (the cache keys of
@@ -6,7 +6,6 @@ untouched stages are unchanged, so their results are reused).
 """
 from __future__ import annotations
 
-import os
 from typing import Callable, Optional
 
 import numpy as np
@@ -15,21 +14,21 @@ from .common.cache import StageCache, content_hash
 from .common.config import Config, load_config
 from .common.logging import StageTimer, get_logger, new_run_id
 from .common.models import (AnalysisResult, ModulationHypothesis, Payload,
-                            FECHypothesis, FrameHypothesis,
-                            InterleaverHypothesis, ScramblerHypothesis)
+                            FrameHypothesis, ScramblerHypothesis)
 from .conditioning import condition
 from .detection import detect_signals, compute_psd
 from .channelization import channelize
 from .params import estimate_parameters
+from .params.estimators import sample_rate_candidates
 from .modulation import classify_modulation
 from .demod import demodulate
 from .bits.ambiguity import enumerate_ambiguities
 from .common.models import BitStream
-from .framing.frames import payload_stats
+from .framing.frames import binary_autocorrelation, payload_stats
 from .hypothesis import bitlayer_search
 from .ingestion import load_recording
 
-STAGE_VERSION = 3   # bump to invalidate caches when algorithms change
+STAGE_VERSION = 7   # bump to invalidate caches when algorithms change
 
 # stage catalogue for the pipeline trace (drives the flow visualisation)
 STAGES = [
@@ -80,11 +79,11 @@ class _Trace:
         return out
 
 
-class RFAnalyzer:
+class Analyzer:
     def __init__(self, config: Optional[Config] = None,
                  use_cache: bool = True):
         self.config = config or load_config()
-        self.log = get_logger("rfanalyzer", self.config.log_level)
+        self.log = get_logger("dhwani", self.config.log_level)
         self.cache = StageCache(self.config.cache_dir, enabled=use_cache)
 
     # ------------------------------------------------------------------
@@ -92,12 +91,17 @@ class RFAnalyzer:
                 center_frequency: float = None, datatype: str = None,
                 signal_index: int = 0, overrides: dict = None,
                 no_ml: bool = False,
-                progress: Callable[[str, float], None] = None) -> AnalysisResult:
+                progress: Callable[[str, float], None] = None,
+                stop_after: str = None,
+                start_sample: int = None) -> AnalysisResult:
         """Full-chain analysis of one file.
 
         overrides: analyst-pinned values, e.g. {"modulation": "BPSK",
-        "symbol_rate_norm": 0.125, "segment": {...}}. Only stages downstream
-        of an override are recomputed."""
+        "symbol_rate_norm": 0.125, "signal_index": 1}. Every stage re-runs;
+        only S2 detection is served from the cache. stop_after: "S2" or
+        "S5" ends the run there (CLI detect / classify share this engine).
+        start_sample pins the analysis window (default: the strongest of
+        the scanned windows)."""
         overrides = overrides or {}
         result = AnalysisResult(run_id=new_run_id())
         timer = StageTimer(self.log, result.stage_timings)
@@ -116,51 +120,86 @@ class RFAnalyzer:
         prog("ingest", 1.0)
         data_hash = content_hash(rec.samples)
 
-        # ---------------- S1 conditioning ------------------------------
-        with timer.stage("S1_condition"):
-            x, cond = condition(rec.samples)
-            result.conditioning = cond
-            result.warnings.extend(cond.warnings)
-            trace.mark("S1", "executed",
-                       f"DC {'removed' if cond.dc_removed else 'negligible'}, "
-                       f"clipping {cond.clipping_fraction*100:.2f}%, "
-                       f"IQ {'corrected' if cond.iq_corrected else 'balanced'}")
+        # ---------------- S1 + S2 per analysis window -------------------
+        # S1/S2 work on WINDOW samples at a time. A longer file is scanned
+        # window by window (up to cfar.scan_windows) and the window holding
+        # the strongest detection is analysed; start_sample pins it.
+        WINDOW = 1 << 22
+        n_total = rec.n_samples
+        if start_sample is not None:
+            starts = [int(start_sample)]
+        else:
+            starts = list(range(0, max(1, n_total), WINDOW))
+            if len(starts) > 1 and n_total - starts[-1] < WINDOW:
+                starts[-1] = n_total - WINDOW      # full-length tail window
+            starts = starts[: self.config.cfar.scan_windows]
+        chosen = None
+        for st in starts:
+            with timer.stage("S1_condition"):
+                x_w, cond_w = condition(rec.samples[st:st + WINDOW])
+            with timer.stage("S2_detect"):
+                key = self.cache.key(data_hash, "detect", STAGE_VERSION,
+                                     {"cfar": vars(self.config.cfar),
+                                      "start": st})
+                cached = self.cache.get(key)
+                if cached is None:
+                    segs_w, dbg = detect_signals(
+                        x_w, self.config.cfar, sample_rate=rec.sample_rate)
+                    wf = dbg["waterfall"]
+                    plots_w = {
+                        "psd": _psd_plot(x_w),
+                        "waterfall": {
+                            "db": _quantize(wf["waterfall_db"]),
+                            "freq_norm": wf["freq_norm"].tolist(),
+                        },
+                    }
+                    self.cache.put(key, (segs_w, plots_w))
+                else:
+                    segs_w, plots_w = cached
+            strength = max((sg.snr_db for sg in segs_w), default=-np.inf)
+            if chosen is None or strength > chosen[0]:
+                chosen = (strength, st, x_w, cond_w, segs_w, plots_w)
+        _s, start, x, cond, segments, plots = chosen
+        result.conditioning = cond
+        result.recording_meta["analysed_start"] = start
+        result.recording_meta["analysed_samples"] = cond.analysed_samples
+        result.warnings.extend(cond.warnings)
+        if start > 0 or start + len(x) < n_total:
+            scanned = min(n_total, starts[-1] + WINDOW) - starts[0]
+            result.warnings.append(
+                f"analysed samples {start:,}-{start + len(x):,} of {n_total:,}"
+                + (" (pinned by start_sample)" if start_sample is not None
+                   else f": the {WINDOW:,}-sample window with the strongest "
+                        f"detection among {len(starts)} scanned")
+                + (f"; samples after {starts[0] + scanned:,} were not "
+                   "scanned" if starts[0] + scanned < n_total
+                   and start_sample is None else ""))
+        trace.mark("S1", "executed",
+                   f"DC {'removed' if cond.dc_removed else 'negligible'}, "
+                   f"clipping {cond.clipping_fraction*100:.2f}%, "
+                   f"IQ imbalance {cond.iq_gain_imbalance_db:.2f} dB / "
+                   f"{cond.iq_phase_error_deg:.1f} deg (measured, "
+                   f"{'corrected' if cond.iq_corrected else 'not corrected'})")
         prog("condition", 1.0)
 
-        # ---------------- S2 detection ---------------------------------
-        with timer.stage("S2_detect"):
-            key = self.cache.key(data_hash, "detect", STAGE_VERSION,
-                                 {"cfar": vars(self.config.cfar)})
-            cached = self.cache.get(key)
-            if cached is None:
-                segments, dbg = detect_signals(x, self.config.cfar,
-                                               sample_rate=rec.sample_rate)
-                wf = dbg["waterfall"]
-                plots = {
-                    "psd": _psd_plot(x),
-                    "waterfall": {
-                        "db": _quantize(wf["waterfall_db"]),
-                        "freq_norm": wf["freq_norm"].tolist(),
-                    },
-                }
-                self.cache.put(key, (segments, plots))
-            else:
-                segments, plots = cached
-            for s in segments:
-                s.sample_rate = rec.sample_rate
-            result.segments = segments
-            result.plots.update(plots)
-            trace.mark("S2", "executed",
-                       f"{len(segments)} signal(s) above threshold" +
-                       (f"; best SNR {segments[0].snr_db:.1f} dB"
-                        if segments else ""))
-            if not segments:
-                result.warnings.append("no signals detected above the CFAR "
-                                       "threshold; analysis stopped at S2")
-                result.pipeline_trace = trace.finalize(
-                    "stopped at S2: no signals detected")
-                return result
+        for s in segments:
+            s.sample_rate = rec.sample_rate
+        result.segments = segments
+        result.plots.update(plots)
+        trace.mark("S2", "executed",
+                   f"{len(segments)} signal(s) above threshold" +
+                   (f"; best SNR {segments[0].snr_db:.1f} dB"
+                    if segments else ""))
+        if not segments:
+            result.warnings.append("no signals detected above the CFAR "
+                                   "threshold; analysis stopped at S2")
+            result.pipeline_trace = trace.finalize(
+                "stopped at S2: no signals detected")
+            return result
         prog("detect", 1.0)
+        if stop_after == "S2":
+            result.pipeline_trace = trace.finalize("stopped after S2 (detect)")
+            return result
 
         # ---------------- segment selection ----------------------------
         sel = overrides.get("signal_index", signal_index)
@@ -179,20 +218,35 @@ class RFAnalyzer:
 
         # ---------------- S4 parameters --------------------------------
         with timer.stage("S4_parameters"):
-            params = estimate_parameters(
-                base, self.config.params,
-                sample_rate=ch["sample_rate"], rate_ratio=ch["rate_ratio"])
+            params = estimate_parameters(base, self.config.params,
+                                         sample_rate=ch["sample_rate"])
+            params.rate_ratio = ch["rate_ratio"]
             if "symbol_rate_norm" in overrides:
-                params.symbol_rate_norm = overrides["symbol_rate_norm"]
+                # the analyst gives symbols per RECORDED sample
+                params.symbol_rate_norm = (overrides["symbol_rate_norm"]
+                                           / ch["rate_ratio"])
                 params.samples_per_symbol = 1.0 / params.symbol_rate_norm
+                if ch["sample_rate"]:
+                    params.symbol_rate_hz = (params.symbol_rate_norm
+                                             * ch["sample_rate"])
                 params.confidences["symbol_rate"] = {
                     "value": 1.0, "method": "analyst override",
                     "verdict": "detected"}
+            if params.symbol_rate_norm:
+                params.symbol_rate_norm_recording = (params.symbol_rate_norm
+                                                     * ch["rate_ratio"])
+            if rec.sample_rate is None and params.symbol_rate_norm_recording:
+                params.sample_rate_candidates = sample_rate_candidates(
+                    params.symbol_rate_norm_recording)
             result.parameters = params
             trace.mark("S4", "executed",
-                       f"Rs {params.symbol_rate_norm if params.symbol_rate_norm else 'unknown'}"
-                       f" (norm), SNR {params.snr_db} dB, "
-                       f"OBW {params.obw99_norm}")
+                       f"Rs {params.symbol_rate_norm_recording or 'unknown'}"
+                       f" (symbols/recorded sample), SNR {params.snr_db} dB, "
+                       f"OBW {params.obw99_norm}" +
+                       ("; sample-rate candidates (PROBABLE): " +
+                        ", ".join(f"{c['sample_rate_hz']:,.0f} Hz"
+                                  for c in params.sample_rate_candidates[:4])
+                        if params.sample_rate_candidates else ""))
         prog("parameters", 1.0)
 
         # ---------------- S5 modulation --------------------------------
@@ -217,6 +271,9 @@ class RFAnalyzer:
         trace.mark("S5", "executed",
                    f"{modulation} (confidence "
                    f"{result.modulation.confidence})")
+        if stop_after == "S5":
+            result.pipeline_trace = trace.finalize("stopped after S5 (classify)")
+            return result
         if modulation in ("UNKNOWN", "OFDM"):
             result.warnings.append(
                 f"modulation '{modulation}' is outside the demodulation set; "
@@ -312,6 +369,12 @@ class RFAnalyzer:
                                      logger=self.log,
                                      progress=lambda f: prog("bitlayer", f))
             result.hypotheses = search["hypotheses"]
+            if search.get("budget_exhausted"):
+                result.warnings.append(
+                    f"bit-layer search stopped at its "
+                    f"{self.config.bitlayer.time_budget_s:.0f} s budget before "
+                    "every candidate stream was examined; the verdicts below "
+                    "come from the streams explored")
             best = search["best"]
             if best:
                 _fill_result_from_best(result, best)
@@ -325,7 +388,7 @@ class RFAnalyzer:
             trace.mark("S7", "executed",
                        f"{len(streams)} candidate bit streams{s7_extra}")
             trace.mark("S8", "executed",
-                       f"interleaver: {il.kind} {il.parameters if il.kind != 'none' else ''}"
+                       f"interleaver: {il.label} {il.parameters if il.kind != 'none' else ''}"
                        if il else "no interleaver hypothesis")
             trace.mark("S9", "executed",
                        (f"FEC: {fec.family}"
@@ -412,6 +475,17 @@ def _fill_result_from_best(result: AnalysisResult, best: dict):
             score=bm["match"])
     else:
         result.scrambler = ScramblerHypothesis(kind="none", score=0.5)
+        if not best.get("crc_hits"):
+            from .scrambling.berlekamp import MAX_WHITENER_PHASES
+            from .scrambling.lfsr import KNOWN_WHITENERS
+            long = [n for n, w in KNOWN_WHITENERS.items()
+                    if (1 << w["degree"]) - 1 > MAX_WHITENER_PHASES]
+            if long:
+                result.warnings.append(
+                    f"no scrambler found, but {', '.join(long)} was only "
+                    f"phase-searched over its first {MAX_WHITENER_PHASES} "
+                    "phases; a stream scrambled at another phase would "
+                    "look unscrambled")
 
     result.interleaver = best["interleaver"]
     result.fec = best["fec"]
@@ -453,6 +527,13 @@ def _fill_result_from_best(result: AnalysisResult, best: dict):
                                        for e in analysis["entropy"]]
     result.plots["rank_profile"] = (result.interleaver.rank_profile
                                     if result.interleaver else None)
+    # bit-stream correlation view (PS v): peaks at the frame period
+    dec = best.get("decoded_bits")
+    if dec is not None and len(dec) > 256:
+        fl = (best.get("frames") or {}).get("frame_length") or 0
+        ac = binary_autocorrelation(dec[:100000],
+                                    min(2048, 4 * fl) if fl else 1024)
+        result.plots["bit_autocorr"] = [round(float(v), 4) for v in ac]
 
 
 def _extract_payload(frames_mat: np.ndarray, analysis: dict, crc) -> bytes:
