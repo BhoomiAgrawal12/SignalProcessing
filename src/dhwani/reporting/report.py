@@ -9,7 +9,7 @@ from __future__ import annotations
 import csv
 import json
 import os
-from typing import Optional
+from xml.sax.saxutils import escape
 
 
 def _rows_for_csv(r: dict) -> list:
@@ -25,6 +25,7 @@ def _rows_for_csv(r: dict) -> list:
         return d.get("value", ""), d.get("method", "")
     for key, cname in [("obw99_norm", "obw"), ("carrier_offset_norm", "cfo"),
                        ("snr_db", "snr"), ("symbol_rate_norm", "symbol_rate"),
+                       ("symbol_rate_norm_recording", "symbol_rate"),
                        ("samples_per_symbol", "symbol_rate"),
                        ("symbol_rate_hz", "symbol_rate"),
                        ("excess_bandwidth", "obw")]:
@@ -39,7 +40,8 @@ def _rows_for_csv(r: dict) -> list:
     s = r.get("scrambler") or {}
     rows.append(("scrambler.kind", s.get("kind"), s.get("score"), s.get("name", "")))
     il = r.get("interleaver") or {}
-    rows.append(("interleaver.kind", il.get("kind"), il.get("score"),
+    rows.append(("interleaver.kind", il.get("label") or il.get("kind"),
+                 il.get("score"),
                  json.dumps(il.get("parameters", {}))))
     f = r.get("fec") or {}
     rows.append(("fec.family", f.get("family"), f.get("syndrome_zero_rate"),
@@ -76,12 +78,20 @@ def export_json(result, path: str):
     return path
 
 
+def _csv_safe(v):
+    """Strings opened by a spreadsheet must not run as formulas (OWASP CSV
+    injection): prefix the trigger characters. Numbers pass unchanged."""
+    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + v
+    return v
+
+
 def export_csv(result, path: str):
     r = result.to_dict() if hasattr(result, "to_dict") else result
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["parameter", "value", "confidence", "method"])
-        w.writerows(_rows_for_csv(r))
+        w.writerows([[_csv_safe(v) for v in row] for row in _rows_for_csv(r)])
     return path
 
 
@@ -112,7 +122,7 @@ def export_sigmf_meta(result, data_path: str, path: str = None):
         "global": {
             "core:datatype": dt_map.get(rec.get("datatype"), "cf32_le"),
             "core:version": "1.0.0",
-            "core:description": "rf-analyzer analysis result",
+            "core:description": "Dhwani analysis result",
             **({"core:sample_rate": rec["sample_rate"]}
                if rec.get("sample_rate") else {}),
         },
@@ -121,8 +131,10 @@ def export_sigmf_meta(result, data_path: str, path: str = None):
                          if rec.get("center_frequency") else {})}],
         "annotations": [],
     }
+    # segment indices are relative to the analysed window
+    offset = int(rec.get("analysed_start") or 0)
     for seg in r.get("segments", []):
-        ann = {"core:sample_start": seg.get("start_sample", 0),
+        ann = {"core:sample_start": offset + seg.get("start_sample", 0),
                "core:sample_count": max(0, seg.get("end_sample", 0) -
                                         seg.get("start_sample", 0)),
                "core:label": f"signal {seg.get('id')}: "
@@ -133,7 +145,7 @@ def export_sigmf_meta(result, data_path: str, path: str = None):
         meta["annotations"].append(ann)
     m = r.get("modulation") or {}
     if m.get("prediction"):
-        meta["global"]["rfanalyzer:analysis"] = {
+        meta["global"]["dhwani:analysis"] = {
             "modulation": m.get("prediction"),
             "modulation_confidence": m.get("confidence"),
             "fec": (r.get("fec") or {}).get("family"),
@@ -161,9 +173,9 @@ def export_pdf(result, path: str):
     r = result.to_dict() if hasattr(result, "to_dict") else result
     styles = getSampleStyleSheet()
     doc = SimpleDocTemplate(path, pagesize=A4, topMargin=15 * mm)
-    story = [Paragraph("RF Analyzer - Analysis Report", styles["Title"]),
-             Paragraph(f"run {r.get('run_id')} - "
-                       f"{r.get('recording', {}).get('file_path', '')}",
+    story = [Paragraph("Dhwani - Analysis Report", styles["Title"]),
+             Paragraph(escape(f"run {r.get('run_id')} - "
+                              f"{r.get('recording', {}).get('file_path', '')}"),
                        styles["Normal"]),
              Spacer(1, 6 * mm)]
     rows = [["Parameter", "Value", "Confidence", "Method"]]
@@ -184,24 +196,24 @@ def export_pdf(result, path: str):
         story.append(Spacer(1, 5 * mm))
         story.append(Paragraph("Warnings", styles["Heading3"]))
         for w in warnings:
-            story.append(Paragraph(f"• {w}", styles["Normal"]))
+            story.append(Paragraph(escape(f"• {w}"), styles["Normal"]))
     pl = r.get("payload") or {}
     if pl.get("hex"):
         story.append(Spacer(1, 5 * mm))
         story.append(Paragraph("Payload (first bytes, hex)", styles["Heading3"]))
-        story.append(Paragraph(pl["hex"][:512], styles["Code"]))
+        story.append(Paragraph(escape(str(pl["hex"])[:512]), styles["Code"]))
     doc.build(story)
     return path
 
 
 _GRC_TEMPLATE = """options:
   parameters:
-    author: rf-analyzer
+    author: dhwani
     catch_exceptions: 'True'
     output_language: python
     generate_options: qt_gui
-    id: rf_analyzer_receiver
-    title: 'rf-analyzer generated receiver'
+    id: dhwani_receiver
+    title: 'Dhwani generated receiver'
   states:
     coordinate: [8, 8]
 
@@ -217,7 +229,7 @@ blocks:
 - name: blocks_file_source_0
   id: blocks_file_source
   parameters:
-    file: '{file_path}'
+    file: {file_path}
     type: complex
     repeat: 'False'
   states: {{coordinate: [16, 260]}}
@@ -230,10 +242,26 @@ blocks:
     taps: firdes.low_pass(1.0, samp_rate, {cutoff}, {trans})
     type: ccc
   states: {{coordinate: [260, 260]}}
-- name: digital_symbol_sync_0
+{sync_block}- name: qtgui_const_sink_x_0
+  id: qtgui_const_sink_x
+  parameters:
+    name: '"Dhwani constellation"'
+    size: '1024'
+    type: complex
+  states: {{coordinate: [800, 260]}}
+
+connections:
+- [blocks_file_source_0, '0', freq_xlating_fir_filter_0, '0']
+{sync_connections}
+metadata:
+  file_format: 1
+"""
+
+
+_GRC_SYNC_BLOCK = """- name: digital_symbol_sync_0
   id: digital_symbol_sync_xx
   parameters:
-    constellation: digital.constellation_calcdist([-1-1j, -1+1j, 1+1j, 1-1j], [0, 1, 3, 2], 4, 1).base()
+    constellation: {constellation}
     damping: '1.0'
     loop_bw: '0.045'
     max_dev: '1.5'
@@ -244,42 +272,57 @@ blocks:
     ted_type: digital.TED_SIGNAL_TIMES_SLOPE_ML
     type: cc
   states: {{coordinate: [520, 260]}}
-- name: qtgui_const_sink_x_0
-  id: qtgui_const_sink_x
-  parameters:
-    name: '"rf-analyzer constellation"'
-    size: '1024'
-    type: complex
-  states: {{coordinate: [800, 260]}}
-
-connections:
-- [blocks_file_source_0, '0', freq_xlating_fir_filter_0, '0']
-- [freq_xlating_fir_filter_0, '0', digital_symbol_sync_0, '0']
-- [digital_symbol_sync_0, '0', qtgui_const_sink_x_0, '0']
-
-metadata:
-  file_format: 1
 """
+
+_GRC_CONSTELLATIONS = {
+    "BPSK": "digital.constellation_bpsk().base()",
+    "QPSK": "digital.constellation_qpsk().base()",
+    "8PSK": "digital.constellation_8psk().base()",
+    "16QAM": "digital.constellation_16qam().base()",
+}
 
 
 def export_grc(result, path: str):
     """GNU Radio 3.10 flowgraph pre-configured from the analysis.
 
     Targets GR 3.10 block ids; generated as a convenience starting point
-    for an analyst with GNU Radio installed (not executed here)."""
+    for an analyst with GNU Radio installed (not executed here). Skipped
+    (returns None) when the sample rate is unknown: every block parameter
+    is in Hz. The symbol-sync block is emitted only for a modulation with a
+    stock GNU Radio constellation object."""
     r = result.to_dict() if hasattr(result, "to_dict") else result
     rec = r.get("recording", {})
     p = r.get("parameters") or {}
-    samp = rec.get("sample_rate") or 1.0
-    rs_norm = p.get("symbol_rate_norm") or 0.1
+    if not rec.get("sample_rate"):
+        return None
+    # float() on every number: `report` re-renders an untrusted JSON
+    samp = float(rec["sample_rate"])
+    rs_norm = float(p.get("symbol_rate_norm_recording") or
+                    p.get("symbol_rate_norm") or 0.1)
     seg = r.get("selected_segment") or {}
-    center = (seg.get("center_hz") or
-              (seg.get("center_norm", 0.0) * samp))
-    bw = (p.get("obw99_hz") or (p.get("obw99_norm") or 0.2) * samp)
+    center = float(seg.get("center_hz") or
+                   (float(seg.get("center_norm") or 0.0) * samp))
+    bw = float(p.get("obw99_hz") or float(p.get("obw99_norm") or 0.2) * samp)
+    mod = str((r.get("modulation") or {}).get("prediction"))
+    cst = _GRC_CONSTELLATIONS.get(mod)
+    if cst:
+        sync_block = _GRC_SYNC_BLOCK.format(constellation=cst)
+        sync_connections = (
+            "- [freq_xlating_fir_filter_0, '0', digital_symbol_sync_0, '0']\n"
+            "- [digital_symbol_sync_0, '0', qtgui_const_sink_x_0, '0']")
+    else:
+        # json.dumps quotes the untrusted label: no newline survives
+        sync_block = (f"# no symbol sync: no stock GNU Radio constellation "
+                      f"for {json.dumps(mod)}\n")
+        sync_connections = (
+            "- [freq_xlating_fir_filter_0, '0', qtgui_const_sink_x_0, '0']")
     content = _GRC_TEMPLATE.format(
         samp_rate=samp, sym_rate=rs_norm * samp,
-        file_path=rec.get("file_path", ""),
-        center_freq=center, cutoff=bw * 0.75, trans=bw * 0.25)
+        # a JSON string is a valid YAML double-quoted scalar: quotes and
+        # newlines in an attacker-chosen filename stay inside the value
+        file_path=json.dumps(str(rec.get("file_path", ""))),
+        center_freq=center, cutoff=bw * 0.75, trans=bw * 0.25,
+        sync_block=sync_block, sync_connections=sync_connections)
     with open(path, "w") as f:
         f.write(content)
     return path
@@ -300,5 +343,7 @@ def export_all(result, out_dir: str, base_name: str = "analysis") -> dict:
     pdf = export_pdf(result, b + ".pdf")
     if pdf:
         written["pdf"] = pdf
-    written["grc"] = export_grc(result, b + ".grc")
+    grc = export_grc(result, b + ".grc")
+    if grc:
+        written["grc"] = grc
     return written
