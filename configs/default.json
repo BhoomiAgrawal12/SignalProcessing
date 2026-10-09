@@ -14,7 +14,6 @@
     "fusion_weights": {"cumulant": 0.5, "cvnet": 0.35}
   },
   "demod": {
-    "target_sps": 4.0,
     "rrc_rolloff": 0.35,
     "max_symbols": 200000
   },

@@ -5,6 +5,7 @@ No magic numbers in stage code - everything tunable lives here.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass, field, asdict
 from typing import Optional
@@ -13,20 +14,18 @@ from typing import Optional
 @dataclass
 class CFARConfig:
     threshold_db: float = 8.0          # margin over local noise floor
-    guard_bins: int = 2
     train_bins: int = 16
     min_bandwidth_bins: int = 3
     min_duration_frames: int = 2
     morph_close_size: int = 3
     nfft: int = 4096
     max_signals: int = 64
+    scan_windows: int = 16             # 2^22-sample windows scanned by S1/S2
 
 
 @dataclass
 class ParamEstConfig:
     obw_fraction: float = 0.99
-    fam_max_samples: int = 262144
-    fam_np: int = 256                  # FAM channelisation window
     symbol_rate_min_norm: float = 1e-4
     symbol_rate_candidates: int = 5
 
@@ -40,22 +39,19 @@ class ModulationConfig:
         "16APSK", "32APSK", "64APSK", "128APSK",
         "2FSK", "4FSK", "GMSK"])
     cvnet_enabled: bool = True
-    cvnet_repo: str = "sohelimi/cvnet-rf"
     cvnet_checkpoint: str = ""         # local path; resolved at runtime
     cvnet_variant: str = "real"        # "real" (54% val acc) or "complex"
     device: str = "auto"               # auto | cpu | mps | cuda
     frame_size: int = 1024
     max_frames: int = 32
     fusion_weights: dict = field(default_factory=lambda: {
-        "cumulant": 0.5, "cvnet": 0.35, "local_cnn": 0.15})
+        "cumulant": 0.5, "cvnet": 0.35})
 
 
 @dataclass
 class DemodConfig:
-    target_sps: float = 4.0
     rrc_rolloff: float = 0.35
     rrc_span_symbols: int = 10
-    timing_loop_bw: float = 0.02
     carrier_loop_bw: float = 0.02
     max_symbols: int = 200000
 
@@ -67,15 +63,15 @@ class BitLayerConfig:
     rank_scan_max_L: int = 512
     rank_scan_rows_factor: int = 2     # rows = factor*L + 32
     rank_scan_max_bits: int = 200000
-    interleaver_block_max: int = 4096
-    conv_interleaver_max_branches: int = 16
     deficiency_significance: float = 3.0
+    # no new beam stream is started after this many seconds; the result
+    # says so (a stream that never validates otherwise explores every node)
+    time_budget_s: float = 90.0
 
 
 @dataclass
 class FECConfig:
     conv_constraint_lengths: list = field(default_factory=lambda: [3, 5, 7, 9])
-    conv_rates: list = field(default_factory=lambda: ["1/2"])
     conv_exhaustive_max_k: int = 7
     rs_candidates: list = field(default_factory=lambda: [
         {"n": 255, "k": 223, "prim": 0x11d, "fcr": 112, "generator": 11},
@@ -97,7 +93,6 @@ class FECConfig:
 class FramingConfig:
     max_frame_bits: int = 8192
     min_frame_bits: int = 16
-    autocorr_max_bits: int = 500000
     crc_candidates: list = field(default_factory=lambda: [
         {"name": "CRC-8", "width": 8, "poly": 0x07, "init": 0x00, "refin": False, "refout": False, "xorout": 0x00},
         {"name": "CRC-8-MAXIM", "width": 8, "poly": 0x31, "init": 0x00, "refin": True, "refout": True, "xorout": 0x00},
@@ -108,18 +103,11 @@ class FramingConfig:
         {"name": "CRC-32", "width": 32, "poly": 0x04C11DB7, "init": 0xFFFFFFFF, "refin": True, "refout": True, "xorout": 0xFFFFFFFF},
         {"name": "CRC-32-BZIP2", "width": 32, "poly": 0x04C11DB7, "init": 0xFFFFFFFF, "refin": False, "refout": False, "xorout": 0xFFFFFFFF},
     ])
-    entropy_sync_threshold: float = 0.15
-    entropy_payload_threshold: float = 0.85
 
 
 @dataclass
 class PayloadIntelConfig:
     enabled: bool = True
-    text_decoding: bool = True
-    encoding_discovery: bool = True
-    structure_discovery: bool = True
-    compression_detection: bool = True
-    protocol_fingerprinting: bool = True
     max_analysis_bytes: int = 1 << 20
     max_decompression_bytes: int = 1 << 20
 
@@ -157,16 +145,22 @@ def load_config(path: Optional[str] = None) -> Config:
     if path and os.path.exists(path):
         with open(path) as f:
             data = json.load(f)
+        log = logging.getLogger(__name__)
         for key, val in data.items():
             if key in _SECTION_TYPES and isinstance(val, dict):
                 section = getattr(cfg, key)
                 for k, v in val.items():
                     if hasattr(section, k):
                         setattr(section, k, v)
+                    else:
+                        log.warning("config %s: unknown key %s.%s ignored",
+                                    path, key, k)
             elif hasattr(cfg, key) and not isinstance(getattr(cfg, key), tuple(_SECTION_TYPES.values())):
                 setattr(cfg, key, val)
+            else:
+                log.warning("config %s: unknown key %s ignored", path, key)
     if not cfg.cache_dir:
-        cfg.cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "rf-analyzer")
+        cfg.cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "dhwani")
     if not cfg.signature_db:
         cfg.signature_db = os.path.join(cfg.cache_dir, "signatures.sqlite")
     return cfg
