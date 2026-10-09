@@ -210,8 +210,8 @@ and demodulation provenance and caps every finding accordingly.
 ## S11 payload intelligence
 
 After payload recovery, S11 answers "what do those bytes mean" with
-evidence, confidence bands (VALIDATED / LIKELY / POSSIBLE / WEAK) and
-explicit limitations: byte/bit forensics, conservative text decoding,
+evidence and confidence bands (VALIDATED / LIKELY / POSSIBLE / WEAK):
+byte/bit forensics, conservative text decoding,
 Base64/hex/URL wrapper discovery, cross-frame field inference (constant
 headers, counters, length fields), compression detection with bounded
 real decompression, conservative encryption assessment (high entropy is
@@ -251,10 +251,9 @@ pipeline flow recorded by the engine.
 
 ## Technology decisions (verified, not assumed)
 
-- **CVNet-RF**: verified on Hugging Face, architecture and checkpoint
-  format read from the repository files, integrated with its own
-  preprocessing. Used as an advisory engine because of its honest ~54%
-  all-SNR accuracy.
+- **CVNet-RF**: optional advisory engine (`pip install -e ".[ml]"`),
+  downloaded at a pinned revision and SHA-256 and loaded with
+  `weights_only=True`.
 - **GNU Radio**: not installed on the dev machine and deliberately kept
   optional; the core is pure NumPy/SciPy with a clean seam
   (`channelize`, `demodulate`) where a GR-backed implementation can be
