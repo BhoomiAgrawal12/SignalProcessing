@@ -5,13 +5,15 @@ Verified facts about the model (README + inference.py, checked 2026-09):
 * Input (1, 2, 1024), z-scored per channel.
 * Checkpoint dict key "model_state"; variants complex_best.pt (50.3% val
   acc, 379k params) and real_best.pt (54.4% val acc, 934k params).
+* Trained 100 epochs (Adam, label smoothing 0.1, phase-rotation + AWGN
+  augmentation) on an 80/10/10 split of 2.56M frames.
 * Accuracy is ~50-54% *averaged over -20..+30 dB SNR* - honest but modest.
   The fusion stage therefore treats this engine as advisory, never
   authoritative, and out-of-distribution inputs are flagged.
 """
 from __future__ import annotations
 
-import os
+import hashlib
 from typing import Optional
 
 import numpy as np
@@ -23,7 +25,24 @@ CLASSES = [
     "FM", "GMSK", "OQPSK"
 ]
 
+# The download is pinned: a moved branch or a swapped file raises instead
+# of loading. Values from huggingface.co/api/models/sohelimi/cvnet-rf.
+REPO = "sohelimi/cvnet-rf"
+REVISION = "df32f6cd9bb033835465928307610bba1c376708"
+SHA256 = {
+    "real": "8a6861dec969d01bcf0198ef2e0fc52c0938c6dacf613ca8b1078eba449ff53c",
+    "complex": "30447995f7fc2931fc24cea415a78301bab1353bdb33dd017a73279a1c582aa1",
+}
+
 _model_cache = {}
+
+
+def check_sha256(path: str, expected: str):
+    with open(path, "rb") as f:
+        got = hashlib.file_digest(f, "sha256").hexdigest()
+    if got != expected:
+        raise ValueError(f"CVNet checkpoint {path}: sha256 {got} does not "
+                         f"match the pinned {expected}")
 
 
 def _build_model(variant: str, torch):
@@ -116,25 +135,22 @@ def _resolve_device(pref: str, torch):
 
 
 def load_cvnet(checkpoint_path: str = "", variant: str = "real",
-               repo: str = "sohelimi/cvnet-rf", device: str = "auto"):
-    """Load CVNet-RF; downloads and caches the checkpoint when no local
-    path is given. Returns (model, device) or raises."""
+               device: str = "auto"):
+    """Load CVNet-RF; downloads the pinned checkpoint when no local path is
+    given. Only tensors are unpickled (weights_only=True): a checkpoint
+    carrying pickled code raises. Returns (model, device) or raises."""
     key = (checkpoint_path, variant, device)
     if key in _model_cache:
         return _model_cache[key]
     import torch
     if not checkpoint_path:
         from huggingface_hub import hf_hub_download
-        checkpoint_path = hf_hub_download(repo_id=repo,
+        checkpoint_path = hf_hub_download(repo_id=REPO, revision=REVISION,
                                           filename=f"{variant}_best.pt")
+        check_sha256(checkpoint_path, SHA256[variant])
     dev = _resolve_device(device, torch)
     model = _build_model(variant, torch)
-    try:
-        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    except Exception:
-        # older-format checkpoint with pickled auxiliary objects; the repo
-        # was inspected manually before allowing this fallback
-        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     state = ckpt["model_state"] if "model_state" in ckpt else ckpt
     model.load_state_dict(state)
     model.to(dev).eval()
