@@ -1,6 +1,6 @@
 """Blind interleaver identification (stage S8) - the project's core IP.
 
-Method (Sicot & Houcke 2009 + report S8):
+Method (after Sicot & Houcke 2009):
 1. GF(2) rank-deficiency profile over trial widths L.  Linear code
    structure makes the profile dip at multiples of the (interleaver x code)
    period; a flat profile means no linear structure is visible.
@@ -9,8 +9,7 @@ Method (Sicot & Houcke 2009 + report S8):
    is plain-coded: verdict "none".
 4. Otherwise test hypotheses: block (r x c factorisations of P), helical
    (block + step sweep), convolutional (branch/delay sweep), PN (period
-   detected, permutation not recovered without many frames - reported
-   honestly).  Each hypothesis is scored by how much *fine-grained*
+   detected, permutation not recovered - reported honestly).  Each hypothesis is scored by how much *fine-grained*
    structure its de-interleaver reveals: after the correct inverse, code
    structure reappears at small L (the "second, deeper dip").
 """
@@ -21,10 +20,9 @@ import numpy as np
 from ..common.models import InterleaverHypothesis
 from ..gf2.rank import (expected_random_deficiency, gf2_rank_bits,
                         rank_profile)
-from .interleavers import (block_deinterleave, helical_deinterleave,
-                           conv_deinterleave)
-
-VERSION = 2
+from .interleavers import (IEEE80211_MODES, block_deinterleave,
+                           conv_deinterleave, helical_deinterleave,
+                           ieee80211_permutation, pn_deinterleave)
 
 
 def _structure_score(bits: np.ndarray, L_max: int, sig_thr: float) -> tuple:
@@ -55,21 +53,23 @@ def _fine_structure_sig(bits: np.ndarray, test_Ls=(16, 32)) -> float:
 
 
 def _align_and_test(bits: np.ndarray, deinterleave, P: int,
-                    sig_thr: float, max_offsets: int = None) -> tuple:
+                    sig_thr: float, max_offsets: int = None,
+                    stride: int = 2) -> tuple:
     """Sweep the block-phase offset (the demodulated stream almost never
     starts on an interleaver boundary); returns (best_offset, best_sig).
 
-    Coarse-to-fine: the fine-structure score of the correct inverse decays
-    gradually around the true offset, so a stride-2 scan followed by a
-    +-1 refinement finds the same maximum at half the cost, and a
-    decisively strong dip stops the scan immediately."""
+    Coarse-to-fine: for block/convolutional inverses the fine-structure
+    score decays gradually around the true offset, so a stride-2 scan
+    followed by a +-1 refinement finds the same maximum at half the cost,
+    and a decisively strong dip stops the scan immediately. The helical
+    inverse peaks at exactly one offset, so its caller passes stride=1."""
     n_off = min(P, max_offsets or P)
 
     def test(off):
         return _fine_structure_sig(deinterleave(bits[off:])[:20000])
 
     best_off, best_sig = 0, 0.0
-    stride = 2 if n_off >= 16 else 1
+    stride = stride if n_off >= 16 else 1
     for off in range(0, n_off, stride):
         sig = test(off)
         if sig > best_sig:
@@ -93,6 +93,25 @@ def _factor_pairs(P: int, max_dim: int = 64):
                 yield r, c
 
 
+def _published_permutations(bits, sig_thr, base_sig) -> list:
+    """802.11a/g bit interleaver modes: a structured permutation the
+    block/helical/conv sweeps cannot express, tested by the same
+    fine-structure gain at stride 1 (sharp alignment). For nbpsc <= 2 it is
+    exactly a block interleaver, so a block hypothesis may tie with it."""
+    hyps = []
+    for ncbps, nbpsc in IEEE80211_MODES:
+        perm = ieee80211_permutation(ncbps, nbpsc)
+        off, sig_gain = _align_and_test(
+            bits, lambda b, p=perm: pn_deinterleave(b, p), ncbps, sig_thr,
+            stride=1)
+        if sig_gain > max(sig_thr, 2 * base_sig):
+            hyps.append(InterleaverHypothesis(
+                kind="ieee80211", period=ncbps,
+                parameters={"ncbps": ncbps, "nbpsc": nbpsc, "offset": off},
+                score=float(sig_gain) * 0.97))
+    return hyps
+
+
 def identify_interleaver(bits: np.ndarray, max_L: int = 512,
                          sig_thr: float = 3.0, rows_factor: int = 2,
                          max_bits: int = 200000,
@@ -112,6 +131,15 @@ def identify_interleaver(bits: np.ndarray, max_L: int = 512,
     signif_L = L[sig > sig_thr]
 
     if signif_L.size == 0:
+        # a short capture can hide a permutation period from the rank scan
+        # (192 bits needs ~80k bits); the published ones are cheap to test
+        pub = _published_permutations(bits, sig_thr,
+                                      _fine_structure_sig(bits[:20000]))
+        if pub:
+            pub.sort(key=lambda h: -h.score)
+            pub[0].rank_profile = profile_dict
+            return pub + [InterleaverHypothesis(
+                kind="none", score=0.1, parameters={"reason": "fallback"})]
         return [InterleaverHypothesis(kind="none", score=1.0,
                                       rank_profile=profile_dict,
                                       parameters={"reason": "rank profile flat: no linear structure detected"})]
@@ -163,7 +191,8 @@ def identify_interleaver(bits: np.ndarray, max_L: int = 512,
                 for step in range(1, min(r, 6)):
                     off, sig_gain = _align_and_test(
                         bits, lambda b, r=r, c=c, st=step:
-                        helical_deinterleave(b, r, c, st), Pc, sig_thr)
+                        helical_deinterleave(b, r, c, st), Pc, sig_thr,
+                        stride=1)
                     if sig_gain > max(sig_thr, 2 * base_sig):
                         hyps.append(InterleaverHypothesis(
                             kind="helical", period=Pc,
@@ -188,13 +217,19 @@ def identify_interleaver(bits: np.ndarray, max_L: int = 512,
         if any(h.score > 4 * sig_thr for h in hyps):
             break
 
+    if not any(h.score > 4 * sig_thr for h in hyps):
+        hyps += _published_permutations(bits, sig_thr, base_sig)
+
     if not hyps:
         # Period detected but no tested inverse revealed finer structure:
         # report a PN/unknown interleaver honestly.
+        # ponytail: period only, no permutation search (P! space); add
+        # code-constraint matching over many aligned periods if an off-air
+        # target needs the PN permutation recovered
         hyps.append(InterleaverHypothesis(
             kind="pseudo_random", period=P, score=0.3,
-            parameters={"note": "period detected via rank dip; permutation "
-                        "not recovered (needs many aligned frames)"}))
+            parameters={"note": "period detected via rank dip; the "
+                        "permutation is not recovered (not implemented)"}))
     hyps.sort(key=lambda h: -h.score)
     # attach profile to the winner only (keep result size sane)
     hyps[0].rank_profile = profile_dict
