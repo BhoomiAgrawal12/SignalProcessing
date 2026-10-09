@@ -31,6 +31,7 @@ def make_wav(path=WAV):
     iq, gt = WaveformFactory(seed=99).generate(**DEMO_CHAIN,
                                                payload_mode="text")
     write_wav(iq, gt, path, SAMPLE_RATE, bits=16)
+    os.remove(os.path.splitext(path)[0] + "_truth.json")   # not shipped
 
 
 def main():

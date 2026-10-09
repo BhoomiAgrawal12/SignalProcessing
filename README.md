@@ -344,10 +344,9 @@ pipeline flow recorded by the engine.
 - **liquid-dsp / AFF3CT / libfec**: not required to meet the performance
   targets (see benchmarks); candidates for a future fast path behind the
   existing interfaces.
-- **reedsolo** (RS decode), **sigmf**, **soundfile**, **reportlab**:
-  verified and used.
+- **reedsolo** (RS decode), **soundfile**, **reportlab**: verified and
+  used. SigMF is plain JSON and needs no package.
 
-Deep dives: [architecture](docs/ARCHITECTURE.md),
-[algorithms](docs/ALGORITHMS.md), [development](docs/DEVELOPMENT.md),
+Deep dives: [algorithms](docs/ALGORITHMS.md),
 [threat model](docs/THREAT_MODEL.md),
 [how the numbers are made](docs/BENCHMARK_METHOD.md).
