@@ -14,8 +14,6 @@ import numpy as np
 
 from ..bits.packing import pack_rows
 
-VERSION = 1
-
 
 def gf2_rank_packed(M: np.ndarray, n_cols: int) -> int:
     """Rank over GF(2) of a bit-packed matrix (rows x words), in-place-free.
@@ -44,30 +42,6 @@ def gf2_rank_packed(M: np.ndarray, n_cols: int) -> int:
             M[mask] ^= M[rank]
         rank += 1
     return rank
-
-
-def gf2_row_reduce(M: np.ndarray, n_cols: int):
-    """Row-reduce in place; returns (rank, pivot_columns)."""
-    n_rows = M.shape[0]
-    rank = 0
-    pivots = []
-    for col in range(n_cols):
-        if rank >= n_rows:
-            break
-        w, b = col >> 6, np.uint64(1 << (col & 63))
-        nz = np.nonzero((M[rank:, w] & b) != 0)[0]
-        if nz.size == 0:
-            continue
-        piv = rank + nz[0]
-        if piv != rank:
-            M[[rank, piv]] = M[[piv, rank]]
-        mask = (M[:, w] & b) != 0
-        mask[rank] = False
-        if mask.any():
-            M[mask] ^= M[rank]
-        pivots.append(col)
-        rank += 1
-    return rank, pivots
 
 
 def gf2_rank_bits(bits: np.ndarray, L: int, n_rows: Optional[int] = None,
