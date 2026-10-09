@@ -1,6 +1,6 @@
 """Stage S6: synchronisation and demodulation to soft bits.
 
-Chain (report S6): coarse CFO removal -> RRC matched filter -> Gardner
+Chain: coarse CFO removal -> RRC matched filter -> Gardner
 timing-recovery loop -> decision-directed carrier PLL -> AGC -> slicer
 with max-log LLRs.  FSK takes the instantaneous-frequency path instead.
 
@@ -13,24 +13,32 @@ import numpy as np
 from scipy import signal as sig
 
 from ..common.models import DemodulationResult
-from .constellations import CONSTELLATIONS, MOD_FAMILY, slice_symbols
+from .constellations import (CONSTELLATIONS, MOD_FAMILY, slice_symbols,
+                             symmetry_order)
 from .filters import rrc_taps
+from ..params.estimators import occupied_bandwidth
 
 
-def _coarse_cfo(x: np.ndarray, order: int, limiter: bool = True) -> float:
+def _coarse_cfo(x: np.ndarray, order: int, limiter: bool = True,
+                max_abs: float = None) -> float:
     """M-power CFO estimate.
 
     The hard limiter sharpens the spectral line for constant-modulus (PSK)
     signals but destroys the amplitude structure that the x^4 line of QAM
-    depends on, so QAM callers pass limiter=False.
+    depends on, so QAM callers pass limiter=False. max_abs limits the
+    search to |CFO| <= max_abs (x^M also carries cyclic side-lines at
+    M*CFO +- k*Rs, which unscrambled coded data can make the strongest).
     """
     n = min(len(x), 1 << 18)
     base = (x[:n] / (np.abs(x[:n]) + 1e-12)) if limiter else x[:n]
     y = base ** order
     Y = np.abs(np.fft.fft(y * np.hanning(n)))
+    f = np.fft.fftfreq(n) / order
     Y[0] = 0
+    if max_abs is not None:
+        Y[np.abs(f) > max_abs] = 0
     k = int(np.argmax(Y))
-    return float(np.fft.fftfreq(n)[k] / order)
+    return float(f[k])
 
 
 def _timing_recover(x: np.ndarray, sps: float,
@@ -253,6 +261,23 @@ def _apply_status(res: DemodulationResult, modulation: str):
         res.warnings.append(
             f"EVM {evm}% is too poor to slice {modulation} reliably: "
             "bit stream withheld from the bit layer")
+    # The symbol-domain carrier estimate is ambiguous by 1/m cycles/symbol
+    # (m = rotational symmetry): the wrong alias still lands every symbol on
+    # the grid, so EVM looks fine while the bits are random. Near the edge
+    # of the unambiguous range +-1/(2m) the choice is a coin flip.
+    # ponytail: flag, do not resolve; resolving needs a carrier estimate
+    # better than Rs/(2m) (band centre and oversampled lines were not)
+    f = res.lock_metrics.get("symbol_cfo_per_symbol")
+    m = symmetry_order(modulation)
+    if (res.demodulation_status == "GOOD" and f is not None and m >= 8
+            and abs(f) > 0.75 / (2 * m)):
+        res.demodulation_status = "DEGRADED"
+        res.lock_metrics["cfo_alias_ambiguous"] = True
+        res.warnings.append(
+            f"carrier frequency ambiguous: the {modulation} estimate "
+            f"({f:+.4f} cycles/symbol) is near the alias boundary "
+            f"+-{1 / (2 * m):.4f}, where a false lock keeps a good EVM but "
+            "scrambles the bits")
     res.lock_metrics["evm_gate_good"] = good
     res.lock_metrics["evm_gate_degraded"] = degraded
     # EVM-implied SNR: honest quality figure alongside the M2M4 estimate
@@ -521,7 +546,10 @@ def _demod_linear(x, modulation, family, sps, config, cfo_norm, res):
     sample_cfo_reliable = (family in ("psk", "oqpsk") and order <= 8) or \
         family == "ask"
     if sample_cfo_reliable:
-        resid = _coarse_cfo(x, m_order, limiter=limiter)
+        # a residual: the line must sit inside +-Rs/2 of the x^M carrier
+        # line, clear of the cyclic side-lines at +-Rs
+        resid = _coarse_cfo(x, m_order, limiter=limiter,
+                            max_abs=0.5 / (m_order * sps))
         if abs(resid) < 0.05:
             x = x * np.exp(-2j * np.pi * resid * n)
             cfo += resid
@@ -702,19 +730,23 @@ def _demod_oqpsk(x, sps, config, res):
     # symbol rate: the x^2 spectrum carries a line PAIR at 2fc +- Rs.
     # Data periodicity produces additional strong lines, so only a pair
     # SYMMETRIC about 2fc (known from the x^4 stage; ~0 after the
-    # correction above) is accepted.
+    # correction above) is accepted, and only at a rate the bandwidth
+    # allows (Rs = OBW/(1+rolloff), rolloff <= 1): repeated frames put
+    # stronger symmetric lines near DC, and S4's |x|^2 rate is weak here
+    # because the stagger flattens the envelope.
+    obw = occupied_bandwidth(x)["obw99"] or 1.0
     z2 = (x[:m] ** 2) * np.hanning(m)
     Z2 = np.abs(np.fft.fft(z2))
     freqs2 = np.fft.fftfreq(m)
     med2 = float(np.median(Z2))
-    peak_idx = np.argsort(Z2)[::-1][:12]
+    peak_idx = np.argsort(Z2)[::-1][:24]
     best_pair = None
     for a in range(len(peak_idx)):
         for b in range(a + 1, len(peak_idx)):
             fa, fb = freqs2[peak_idx[a]], freqs2[peak_idx[b]]
             centre = (fa + fb) / 2.0
             rs_c = abs(fa - fb) / 2.0
-            if abs(centre) < 0.002 and 1e-3 < rs_c < 0.5:
+            if abs(centre) < 0.002 and 0.45 * obw < rs_c < 1.05 * obw:
                 q = float(min(Z2[peak_idx[a]], Z2[peak_idx[b]]) / (med2 + 1e-12))
                 if q > 10 and (best_pair is None or q > best_pair[1]):
                     best_pair = (rs_c, q)
