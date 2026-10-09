@@ -1,6 +1,6 @@
-"""rf-analyzer command-line interface.
+"""Dhwani command-line interface.
 
-Shares the RFAnalyzer engine with the GUI - no duplicated logic.
+Shares the Analyzer engine with the GUI - no duplicated logic.
 """
 from __future__ import annotations
 
@@ -20,6 +20,9 @@ def _add_common(p):
     p.add_argument("--datatype", choices=["complex64", "float32", "int16",
                                           "int8", "uint8"], default=None,
                    help="raw IQ sample format (skips sniffing)")
+    p.add_argument("--start-sample", type=int, default=None,
+                   help="analyse the 2^22-sample window starting here "
+                        "(default: the window with the strongest signal)")
     p.add_argument("--config", default=None, help="JSON config file")
     p.add_argument("--verbose", "-v", action="store_true")
     p.add_argument("--no-cache", action="store_true")
@@ -27,7 +30,7 @@ def _add_common(p):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        prog="rf-analyzer",
+        prog="dhwani",
         description="Automated blind analysis of .IQ/.WAV SDR recordings")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -38,7 +41,7 @@ def main(argv=None):
     a.add_argument("--modulation", default=None,
                    help="analyst override for the modulation")
     a.add_argument("--symbol-rate-norm", type=float, default=None,
-                   help="analyst override, symbols/sample")
+                   help="analyst override, symbols per recorded sample")
     a.add_argument("--output", "-o", default="rf_analysis",
                    help="output directory for exports")
     a.add_argument("--json", action="store_true",
@@ -70,17 +73,20 @@ def main(argv=None):
         ".wav = stereo WAV (left=I, right=Q, float32 by default, needs "
         "--sample-rate); "
         ".sigmf = SigMF pair (<base>.sigmf-data cf32_le + <base>.sigmf-meta, "
-        "ground truth in the rfanalyzer: extension namespace). "
+        "ground truth in the dhwani: extension namespace). "
         "Every format also writes <base>_truth.json.")
     s.add_argument("output", help="output path; extension selects the format "
                    "(.iq | .wav | .sigmf)")
     s.add_argument("--modulation", default="QPSK")
     s.add_argument("--snr", type=float, default=20.0)
     s.add_argument("--sps", type=float, default=8.0)
-    s.add_argument("--fec", choices=["none", "conv", "rs", "ldpc"],
-                   default="none")
-    s.add_argument("--interleaver", choices=["none", "block", "helical",
-                                             "convolutional"], default="none")
+    s.add_argument("--fec", choices=["none", "conv", "rs", "ldpc", "concat"],
+                   default="none",
+                   help="concat = RS(255,223) outer + conv K=7 inner")
+    s.add_argument("--interleaver", default="none",
+                   choices=["none", "block", "diagonal", "helical",
+                            "convolutional", "ieee80211", "pseudo_random"],
+                   help="diagonal = helical (same interleaver)")
     s.add_argument("--scrambler", choices=["none", "pn9"], default="none")
     s.add_argument("--frames", type=int, default=80)
     s.add_argument("--seed", type=int, default=0)
@@ -97,7 +103,7 @@ def main(argv=None):
                    help="WAV sample format: 32 = IEEE float32 (default, "
                         "exact), 16 = PCM16")
 
-    g = sub.add_parser("signatures", help="list the signature library")
+    sub.add_parser("signatures", help="list the signature library")
 
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if getattr(args, "verbose", False)
@@ -112,18 +118,17 @@ def main(argv=None):
         return _cmd_signatures()
 
     from .common.config import load_config
-    from .pipeline import RFAnalyzer
+    from .pipeline import Analyzer
     cfg = load_config(getattr(args, "config", None))
     local_ckpt = os.path.join(os.path.dirname(os.path.dirname(
         os.path.dirname(os.path.abspath(__file__)))),
         "ml", "cvnet_rf", "checkpoints", f"{cfg.modulation.cvnet_variant}_best.pt")
     if os.path.exists(local_ckpt) and not cfg.modulation.cvnet_checkpoint:
         cfg.modulation.cvnet_checkpoint = local_ckpt
-    an = RFAnalyzer(cfg, use_cache=not args.no_cache)
+    an = Analyzer(cfg, use_cache=not args.no_cache)
 
     if args.cmd == "detect":
-        res = _detect_only(an, args)
-        return 0
+        return _detect_only(an, args)
     if args.cmd == "classify":
         return _classify_only(an, args)
 
@@ -135,7 +140,8 @@ def main(argv=None):
     result = an.analyze(args.file, sample_rate=args.sample_rate,
                         center_frequency=args.center_frequency,
                         datatype=args.datatype, signal_index=args.signal,
-                        overrides=overrides, no_ml=args.no_ml)
+                        overrides=overrides, no_ml=args.no_ml,
+                        start_sample=args.start_sample)
     from .reporting import export_all
     written = export_all(result, args.output)
     _print_summary(result)
@@ -153,69 +159,52 @@ def main(argv=None):
 
 
 def _detect_only(an, args):
-    from .ingestion import load_recording
-    from .conditioning import condition
-    from .detection import detect_signals
-    rec = load_recording(args.file, args.sample_rate, args.center_frequency,
-                         args.datatype)
-    x, cond = condition(rec.samples)
-    segs, _ = detect_signals(x, an.config.cfar, sample_rate=rec.sample_rate)
-    out = {"recording": rec.meta_dict(),
-           "signals": [s.to_dict() for s in segs]}
+    res = an.analyze(args.file, sample_rate=args.sample_rate,
+                     center_frequency=args.center_frequency,
+                     datatype=args.datatype, stop_after="S2",
+                     start_sample=args.start_sample)
     if args.json:
         from .common.models import to_json
-        print(to_json(out, indent=2))
-    else:
-        print(f"file: {args.file}")
-        for w in rec.warnings:
-            print(f"  warning: {w}")
-        print(f"detected {len(segs)} signal(s):")
-        for s in segs:
-            line = (f"  [{s.id}] centre {s.center_norm:+.4f} "
-                    f"bw {s.bandwidth_norm:.4f} (normalised)  "
-                    f"SNR {s.snr_db:.1f} dB")
-            if s.sample_rate:
-                line += (f"  | {s.absolute('center'):,.0f} Hz, "
-                         f"bw {s.absolute('bandwidth'):,.0f} Hz")
-            print(line)
-    return out
+        print(to_json({"recording": res.recording_meta,
+                       "signals": [s.to_dict() for s in res.segments]},
+                      indent=2))
+        return 0
+    print(f"file: {args.file}")
+    for w in res.warnings:
+        print(f"  warning: {w}")
+    print(f"detected {len(res.segments)} signal(s):")
+    for s in res.segments:
+        line = (f"  [{s.id}] centre {s.center_norm:+.4f} "
+                f"bw {s.bandwidth_norm:.4f} (normalised)  "
+                f"SNR {s.snr_db:.1f} dB")
+        if s.sample_rate:
+            line += (f"  | {s.absolute('center'):,.0f} Hz, "
+                     f"bw {s.absolute('bandwidth'):,.0f} Hz")
+        print(line)
+    return 0
 
 
 def _classify_only(an, args):
-    from .ingestion import load_recording
-    from .conditioning import condition
-    from .detection import detect_signals
-    from .channelization import channelize
-    from .params import estimate_parameters
-    from .modulation import classify_modulation
-    import copy
-    rec = load_recording(args.file, args.sample_rate, args.center_frequency,
-                         args.datatype)
-    x, _ = condition(rec.samples)
-    segs, _ = detect_signals(x, an.config.cfar, sample_rate=rec.sample_rate)
-    if not segs:
+    res = an.analyze(args.file, sample_rate=args.sample_rate,
+                     center_frequency=args.center_frequency,
+                     datatype=args.datatype, signal_index=args.signal,
+                     no_ml=args.no_ml, stop_after="S5",
+                     start_sample=args.start_sample)
+    if not res.segments:
         print("no signals detected")
         return 1
-    seg = segs[min(args.signal, len(segs) - 1)]
-    ch = channelize(x, seg)
-    p = estimate_parameters(ch["samples"], an.config.params,
-                            sample_rate=ch["sample_rate"])
-    mcfg = an.config.modulation
-    if args.no_ml:
-        mcfg = copy.copy(mcfg)
-        mcfg.cvnet_enabled = False
-    m = classify_modulation(ch["samples"], p, mcfg)
+    p, m = res.parameters, res.modulation
     if args.json:
         print(json.dumps({"parameters": p.to_dict(),
                           "modulation": m.to_dict()}, indent=2, default=str))
-    else:
-        print(f"signal {seg.id}: SNR {p.snr_db} dB, "
-              f"Rs {p.symbol_rate_norm} (normalised)")
-        print(f"modulation: {m.prediction}  confidence {m.confidence}")
-        for label, prob in m.alternatives:
-            print(f"    {label:8s} {prob:.3f}")
-        if not m.classifier_agreement:
-            print("  NOTE: engines disagree - inspect before trusting")
+        return 0
+    print(f"signal {res.selected_segment['id']}: SNR {p.snr_db} dB, "
+          f"Rs {p.symbol_rate_norm_recording} symbols/recorded sample")
+    print(f"modulation: {m.prediction}  confidence {m.confidence}")
+    for label, prob in m.alternatives:
+        print(f"    {label:8s} {prob:.3f}")
+    if not m.classifier_agreement:
+        print("  NOTE: engines disagree - inspect before trusting")
     return 0
 
 
@@ -237,7 +226,6 @@ def _cmd_report(args):
 
 
 def _cmd_synth(args):
-    import numpy as np
     from .synth.factory import WaveformFactory
     from .synth.writers import write_recording
     fac = WaveformFactory(seed=args.seed)
@@ -248,13 +236,22 @@ def _cmd_synth(args):
         fec = {"family": "reed_solomon", "n": 255, "k": 223}
     elif args.fec == "ldpc":
         fec = {"family": "ldpc", "n": 256, "k": 128, "seed": 1}
+    elif args.fec == "concat":
+        fec = {"family": "concatenated",
+               "outer": {"family": "reed_solomon", "n": 255, "k": 223},
+               "inner": {"family": "convolutional", "K": 7,
+                         "generators": (0o171, 0o133)}}
     il = {"kind": "none"}
     if args.interleaver == "block":
         il = {"kind": "block", "rows": 8, "cols": 16}
-    elif args.interleaver == "helical":
+    elif args.interleaver in ("diagonal", "helical"):
         il = {"kind": "helical", "rows": 8, "cols": 16, "step": 3}
     elif args.interleaver == "convolutional":
         il = {"kind": "convolutional", "branches": 4, "delay": 8}
+    elif args.interleaver == "ieee80211":
+        il = {"kind": "ieee80211", "ncbps": 192, "nbpsc": 4}
+    elif args.interleaver == "pseudo_random":
+        il = {"kind": "pseudo_random", "period": 128}
     scr = {"kind": "none"}
     if args.scrambler == "pn9":
         scr = {"kind": "known_whitening", "name": "PN9-CC1101"}
@@ -289,7 +286,7 @@ def _cmd_signatures():
 
 def _print_summary(result):
     r = result
-    print("\n=== rf-analyzer result ===")
+    print("\n=== Dhwani result ===")
     print(f"run: {r.run_id}")
     for w in r.warnings:
         print(f"warning: {w}")
@@ -298,12 +295,17 @@ def _print_summary(result):
               f"(confidence {r.modulation.confidence})")
     if r.parameters:
         p = r.parameters
-        print(f"SNR {p.snr_db} dB | Rs {p.symbol_rate_norm} norm"
+        print(f"SNR {p.snr_db} dB | Rs {p.symbol_rate_norm_recording} "
+              "symbols/recorded sample"
               + (f" = {p.symbol_rate_hz:,.0f} Bd" if p.symbol_rate_hz else ""))
+        for c in p.sample_rate_candidates[:4]:
+            print(f"sample-rate candidate (PROBABLE, not applied): "
+                  f"{c['sample_rate_hz']:,.0f} Hz -> "
+                  f"{c['standard_symbol_rate']:,.0f} Bd")
     if r.scrambler:
         print(f"scrambler: {r.scrambler.kind} {r.scrambler.name}")
     if r.interleaver:
-        print(f"interleaver: {r.interleaver.kind} {r.interleaver.parameters}")
+        print(f"interleaver: {r.interleaver.label} {r.interleaver.parameters}")
     if r.fec:
         print(f"FEC: {r.fec.family} {r.fec.parameters} "
               f"syndrome-zero-rate={r.fec.syndrome_zero_rate}")
