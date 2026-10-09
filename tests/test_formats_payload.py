@@ -10,9 +10,9 @@ import logging
 import numpy as np
 import pytest
 
-from rfanalyzer.pipeline import RFAnalyzer
-from rfanalyzer.synth.factory import WaveformFactory
-from rfanalyzer.synth.writers import write_recording
+from dhwani.pipeline import Analyzer
+from dhwani.synth.factory import WaveformFactory
+from dhwani.synth.writers import write_recording
 
 logging.disable(logging.INFO)
 
@@ -32,7 +32,7 @@ def test_format_roundtrip_payload(tmp_path, config, qpsk_text, ext):
     path = str(tmp_path / f"sig.{ext}")
     write_recording(iq, gt, path, sample_rate=1e6)
     data_path = path + "-data" if ext == "sigmf" else path
-    res = RFAnalyzer(config, use_cache=False).analyze(
+    res = Analyzer(config, use_cache=False).analyze(
         data_path, sample_rate=None if ext != "iq" else 1e6)
 
     assert res.modulation.prediction in ("QPSK", "OQPSK")
@@ -59,7 +59,7 @@ def test_random_payload_match(tmp_path, config):
                           cfo_norm=0.005, phase_offset=0.4, n_frames=80)
     p = str(tmp_path / "sig.iq")
     iq.astype(np.complex64).tofile(p)
-    res = RFAnalyzer(config, use_cache=False).analyze(p, sample_rate=1e6)
+    res = Analyzer(config, use_cache=False).analyze(p, sample_rate=1e6)
     truth_payload = bytes.fromhex("".join(gt.payloads))
     assert res.payload.data and res.payload.data in truth_payload
     assert len(res.payload.data) >= len(truth_payload) // 2
