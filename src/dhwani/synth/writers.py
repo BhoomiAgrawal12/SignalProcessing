@@ -96,7 +96,7 @@ def write_sigmf(iq: np.ndarray, gt: GroundTruth, base_path: str,
     """SigMF v1 pair: <base>.sigmf-data (cf32_le) + <base>.sigmf-meta.
 
     Standard information goes in SigMF core fields; the synthetic ground
-    truth lives in the project extension namespace `rfanalyzer:` so the
+    truth lives in the project extension namespace `dhwani:` so the
     files stay schema-valid for other SigMF tools.
     """
     if base_path.endswith((".sigmf", ".sigmf-data", ".sigmf-meta")):
@@ -111,10 +111,10 @@ def write_sigmf(iq: np.ndarray, gt: GroundTruth, base_path: str,
         "global": {
             "core:version": SIGMF_VERSION,
             "core:datatype": "cf32_le",
-            "core:description": "rf-analyzer synthetic waveform "
-                                "(ground truth in rfanalyzer namespace)",
+            "core:description": "Dhwani synthetic waveform "
+                                "(ground truth in dhwani namespace)",
             **({"core:sample_rate": float(sample_rate)} if sample_rate else {}),
-            "rfanalyzer:ground_truth": json.loads(gt.to_json()),
+            "dhwani:ground_truth": json.loads(gt.to_json()),
         },
         "captures": [capture],
         "annotations": [{
