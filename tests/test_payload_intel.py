@@ -3,10 +3,9 @@ import gzip
 import struct
 
 import numpy as np
-import pytest
 
-from rfanalyzer.payload import analyze_payload
-from rfanalyzer.payload.models import confidence_band
+from dhwani.payload import analyze_payload
+from dhwani.payload.models import confidence_band
 
 
 def test_plain_text():
@@ -111,3 +110,18 @@ def test_confidence_bands():
 def test_empty_payload():
     r = analyze_payload(b"")
     assert not r["available"]
+
+
+def test_decompression_stays_bounded():
+    """Invariant: a compression bomb is cut at max_output, for every
+    stdlib decompressor (64 MiB of zeros compress to a few KB)."""
+    import bz2
+    import lzma
+    from dhwani.payload.compression_detector import detect_compression
+    bomb = bytes(64 << 20)
+    for blob in (gzip.compress(bomb), bz2.compress(bomb), lzma.compress(bomb)):
+        assert len(blob) < 1 << 20
+        [f] = [f for f in detect_compression(blob, max_output=1 << 16)
+               if f.details.get("decompressed")]
+        assert f.details["output_bytes"] <= 1 << 16
+        assert f.limitations == ["output truncated at limit"]

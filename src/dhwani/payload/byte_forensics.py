@@ -1,7 +1,6 @@
 """A. Byte and bit forensics: statistics only, no interpretation."""
 from __future__ import annotations
 
-import math
 
 import numpy as np
 

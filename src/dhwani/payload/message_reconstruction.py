@@ -3,7 +3,6 @@ periodicity). Produces per-message offsets, header/payload split from
 the field map, and decoded content previews."""
 from __future__ import annotations
 
-from .models import Finding
 from .text_decoder import _text_quality
 
 
