@@ -75,11 +75,11 @@ function render(r) {
     detail: (sid) => stageDetail(sid, r), stepMs: 300 });
 
   $("in_tiles").innerHTML =
-    UI.tile("format", UI.esc(rec.format),
-            UI.esc(rec.datatype || "") +
+    UI.tile("format", rec.format,
+            (rec.datatype || "") +
             (rec.datatypeSource ? ` (${rec.datatypeSource})` : ""), true) +
     UI.tile("sample rate", rec.sampleRate ?
-            `${(rec.sampleRate / 1e6).toFixed(3)} <small>Msps</small>` :
+            UI.html(`${(rec.sampleRate / 1e6).toFixed(3)} <small>Msps</small>`) :
             "unknown", rec.sampleRateSource || "") +
     UI.tile("samples", rec.nSamples.toLocaleString(),
             rec.duration ? rec.duration.toFixed(4) + " s" : "") +
@@ -87,10 +87,10 @@ function render(r) {
             r.signals.length ? `best SNR ${r.signals[0].snrDb} dB` : "");
 
   UI.kvTable("t_rec", [
-    ["file", UI.esc(currentName)],
+    ["file", currentName],
     ["format", rec.format],
-    ["datatype", `${rec.datatype}` +
-      (rec.datatypeSource ? ` <span class="mono">(${rec.datatypeSource})</span>` : "")],
+    ["datatype", UI.html(UI.esc(rec.datatype) +
+      (rec.datatypeSource ? ` <span class="mono">(${UI.esc(rec.datatypeSource)})</span>` : ""))],
     ["sample rate", rec.sampleRate ?
       `${rec.sampleRate.toLocaleString()} Hz (${rec.sampleRateSource})` :
       "unknown - set it in the overrides for absolute units"],
@@ -99,14 +99,14 @@ function render(r) {
     ["duration", rec.duration ? rec.duration.toFixed(4) + " s" : "-"],
   ]);
   UI.kvTable("t_sniff", (rec.sniff || []).slice(0, 5).map((s) =>
-    [s.dtype, UI.meter(s.confidence), UI.esc(s.explanation)]),
+    [s.dtype, UI.html(UI.meter(s.confidence)), s.explanation]),
     rec.sniff ? ["candidate", "confidence", "evidence"] :
     [["header-declared format", "", ""]]);
   const c = r.conditioning;
   UI.kvTable("t_cond", [
-    ["DC offset removed", `<span class="mono">I ${c.dcOffset[0]}, Q ${c.dcOffset[1]}</span>`],
-    ["clipping", `${(c.clippingFraction * 100).toFixed(3)}%` +
-      (c.clippingFraction > 1e-3 ? " " + UI.badge("CLIPPED", "warn") : "")],
+    ["DC offset removed", UI.html(`<span class="mono">I ${c.dcOffset[0]}, Q ${c.dcOffset[1]}</span>`)],
+    ["clipping", UI.html(`${(c.clippingFraction * 100).toFixed(3)}%` +
+      (c.clippingFraction > 1e-3 ? " " + UI.badge("CLIPPED", "warn") : ""))],
     ["normalisation", "unit RMS"],
   ]);
 
@@ -127,11 +127,11 @@ function render(r) {
   $("p_tiles").innerHTML =
     UI.tile("symbol rate", p.symbol_rate_norm != null ?
             (p.symbol_rate_hz ?
-             `${(p.symbol_rate_hz / 1e3).toFixed(2)} <small>kBd</small>` :
-             `${p.symbol_rate_norm} <small>norm</small>`) : "not found",
+             UI.html(`${(p.symbol_rate_hz / 1e3).toFixed(2)} <small>kBd</small>`) :
+             UI.html(`${UI.esc(p.symbol_rate_norm)} <small>norm</small>`)) : "not found",
             p.symbol_rate_confidence != null ?
             `confidence ${p.symbol_rate_confidence}` : "", true) +
-    UI.tile("SNR (M2M4)", `${p.snr_db ?? "-"} <small>dB</small>`, "") +
+    UI.tile("SNR (M2M4)", UI.html(`${UI.esc(p.snr_db ?? "-")} <small>dB</small>`), "") +
     UI.tile("occupied bw", `${p.obw99_norm ?? "-"}`, "99% power, normalised") +
     UI.tile("envelope cv", `${p.envelope_cv ?? "-"}`,
             "FSK <= 0.13 | PSK/QAM >= 0.27");
@@ -152,13 +152,13 @@ function render(r) {
     (m.constraints_applied || []).map((cst) =>
       `<div style="color:var(--ink2);font-size:0.82rem;margin-top:5px">` +
       `${UI.esc(cst)}</div>`).join("");
-  const modRows = (m.alternatives || []).map((a) => ["candidate", a[0], UI.meter(a[1])]);
+  const modRows = (m.alternatives || []).map((a) => ["candidate", a[0], UI.html(UI.meter(a[1]))]);
   for (const [eng, pred] of Object.entries(m.engine_predictions || {}))
     modRows.push(["engine " + eng,
-      Array.isArray(pred) ? pred[0] : `<span class="mono">${UI.esc(JSON.stringify(pred))}</span>`,
+      Array.isArray(pred) ? pred[0] : UI.html(`<span class="mono">${UI.esc(JSON.stringify(pred))}</span>`),
       Array.isArray(pred) ? pred[1] : ""]);
   UI.kvTable("t_mod", modRows, ["source", "prediction", "score"]);
-  UI.kvTable("t_warn", (r.warnings || []).map((w) => [UI.esc(w)]));
+  UI.kvTable("t_warn", (r.warnings || []).map((w) => [w]));
 
   const blob = new Blob([JSON.stringify(r, null, 2)], { type: "application/json" });
   $("dl_json").href = URL.createObjectURL ? URL.createObjectURL(blob) : "#";
@@ -173,9 +173,9 @@ function stageDetail(sid, r) {
     return t;
   };
   if (sid === "S0") return mk((r.recording.sniff || []).map((s) =>
-    [s.dtype, s.confidence, UI.esc(s.explanation)]));
+    [s.dtype, s.confidence, s.explanation]));
   if (sid === "S1") return mk([["clipping", r.conditioning.clippingFraction],
-    ["dc", `<span class="mono">${r.conditioning.dcOffset.join(", ")}</span>`]]);
+    ["dc", UI.html(`<span class="mono">${r.conditioning.dcOffset.join(", ")}</span>`)]]);
   if (sid === "S2") return mk(r.signals.map((s) =>
     [`signal ${s.id}`, `centre ${s.center.toFixed(4)}, bw ${s.bandwidth.toFixed(4)}, SNR ${s.snrDb} dB`]));
   if (sid === "S4") return mk(Object.entries(r.parameters || {})

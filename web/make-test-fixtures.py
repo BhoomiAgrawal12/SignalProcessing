@@ -7,7 +7,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import scipy.io.wavfile as wavfile
 
-from rfanalyzer.synth.factory import WaveformFactory
+from dhwani.synth.factory import WaveformFactory
 
 out = os.path.join(os.path.dirname(__file__), "..", "examples", "webtest")
 os.makedirs(out, exist_ok=True)
@@ -37,4 +37,16 @@ u8 = np.empty(2 * len(z), np.uint8)
 u8[0::2] = (z.real * 100 + 127.5).astype(np.uint8)
 u8[1::2] = (z.imag * 100 + 127.5).astype(np.uint8)
 u8.tofile(os.path.join(out, "bpsk_u8.iq"))
+# mono (real) WAV: a 2FSK burst on a 0.15-cycle/sample carrier; both
+# engines convert it to complex baseband at half the rate (1.A), so 16
+# samples/symbol here arrive as 8
+iq5, _ = fac.generate(modulation="2FSK", sps=16.0, snr_db=16.0, n_frames=120)
+n = np.arange(len(iq5))
+real = (iq5 * np.exp(2j * np.pi * 0.15 * n)).real
+real = real / np.abs(real).max() * 0.7
+wavfile.write(os.path.join(out, "fsk2_mono.wav"), 48000,
+              (real * 32000).astype(np.int16))
+# 2FSK at 4 samples/symbol (window-ranking fix, both engines)
+iq6, _ = fac.generate(modulation="2FSK", sps=4.0, snr_db=16.0, n_frames=120)
+iq6.astype(np.complex64).tofile(os.path.join(out, "fsk2_4sps.iq"))
 print("fixtures written to", out)
