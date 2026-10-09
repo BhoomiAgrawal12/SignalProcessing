@@ -84,7 +84,7 @@ that case. The web pages make one same-origin request,
 
 ## Invariants
 
-See CLAUDE.md, "Invariants to preserve". In short: unknown stays
+Unknown stays
 unknown, quality gates stop the chain, S11 is capped by provenance,
 decompression is bounded, overrides are labelled, S0-S2 changes bump
 `STAGE_VERSION`, untrusted inputs are escaped and never unpickled, and
