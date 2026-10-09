@@ -1,9 +1,8 @@
 import numpy as np
-import pytest
 
-from rfanalyzer.fec.conv import ConvCode, conv_encode, viterbi_decode
-from rfanalyzer.fec.rs import RSCode, symbols_to_bits
-from rfanalyzer.fec.detect import identify_fec, identify_convolutional
+from dhwani.fec.conv import ConvCode, conv_encode, viterbi_decode
+from dhwani.fec.rs import RSCode
+from dhwani.fec.detect import identify_fec
 
 
 def test_viterbi_clean(rng):
