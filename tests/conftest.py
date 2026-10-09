@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from rfanalyzer.common.config import Config
+from dhwani.common.config import Config
 
 
 @pytest.fixture(scope="session")
