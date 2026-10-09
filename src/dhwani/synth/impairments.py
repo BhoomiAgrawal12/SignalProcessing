@@ -1,4 +1,4 @@
-"""Channel impairments with known ground truth (report §28)."""
+"""Channel impairments with known ground truth."""
 from __future__ import annotations
 
 import numpy as np
@@ -55,3 +55,16 @@ def dc_offset(x: np.ndarray, level: complex) -> np.ndarray:
 
 def multipath(x: np.ndarray, taps: np.ndarray) -> np.ndarray:
     return sig.lfilter(taps, [1.0], x)
+
+
+def cfo_drift(x: np.ndarray, drift_norm: float) -> np.ndarray:
+    """Carrier drifting linearly by drift_norm cycles/sample over the burst
+    (oscillator warm-up, Doppler): phase = pi * drift/N * n^2."""
+    n = np.arange(len(x))
+    return x * np.exp(1j * np.pi * drift_norm / max(1, len(x)) * n ** 2)
+
+
+def cw_interferer(x: np.ndarray, freq_norm: float, rel_db: float) -> np.ndarray:
+    """An unmodulated carrier at freq_norm, rel_db relative to the signal."""
+    p = float((np.abs(x) ** 2).mean()) * 10 ** (rel_db / 10)
+    return x + np.sqrt(p) * np.exp(2j * np.pi * freq_norm * np.arange(len(x)))

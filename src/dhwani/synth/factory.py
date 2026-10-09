@@ -1,4 +1,4 @@
-"""Synthetic waveform factory (report §8, figure 3): bits -> frame ->
+"""Synthetic waveform factory: bits -> frame ->
 FEC -> interleave -> scramble -> modulate -> pulse-shape -> impair -> IQ,
 with the full ground-truth label set preserved at every step.
 
@@ -18,10 +18,11 @@ from scipy.signal import hilbert as _hilbert
 from ..demod.constellations import CONSTELLATIONS, bits_to_iq_symbols
 from ..demod.filters import rrc_taps
 from ..fec.conv import ConvCode, conv_encode
-from ..fec.rs import RSCode, symbols_to_bits
+from ..fec.rs import RSCode
 from ..framing.crc import crc_compute
 from ..interleaving.interleavers import (block_interleave, conv_interleave,
-                                         helical_interleave, pn_interleave)
+                                         helical_interleave,
+                                         ieee80211_permutation, pn_interleave)
 from ..scrambling.lfsr import additive_scramble, KNOWN_WHITENERS
 from . import impairments as imp
 
@@ -47,6 +48,17 @@ class GroundTruth:
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2)
+
+
+# The reference chain behind examples/demo.py, the web demo report and the
+# GUI smoke test: QPSK, conv K=7 (171,133), block 8x16, PN9, 96-bit frames
+# with sync EB90 and CRC-16/CCITT-FALSE. Use with WaveformFactory(seed=99).
+DEMO_CHAIN = dict(
+    modulation="QPSK", sps=8.0, snr_db=22.0, cfo_norm=0.006, phase_offset=0.5,
+    fec={"family": "convolutional", "K": 7, "generators": (0o171, 0o133)},
+    interleaver={"kind": "block", "rows": 8, "cols": 16},
+    scrambler={"kind": "known_whitening", "name": "PN9-CC1101"},
+    n_frames=80)
 
 
 class WaveformFactory:
@@ -77,6 +89,44 @@ class WaveformFactory:
                       "crc": "CRC-16-CCITT-FALSE", "payload_len": payload_len}
         return bits, frame_meta, payloads
 
+    # ---------------- FEC ---------------------------------------------------
+    def _encode_fec(self, bits: np.ndarray, fec: dict) -> tuple:
+        """Returns (coded bits, ground-truth fields). 'concatenated' runs the
+        outer code first, then the inner one: {"family": "concatenated",
+        "outer": {...reed_solomon...}, "inner": {...convolutional...}}."""
+        family = fec.get("family", "none")
+        if family == "concatenated":
+            outer, inner = dict(fec["outer"]), dict(fec["inner"])
+            bits, o_info = self._encode_fec(bits, outer)
+            bits, i_info = self._encode_fec(bits, inner)
+            outer.update(o_info)
+            inner.update(i_info)
+            return bits, {"outer": outer, "inner": inner}
+        if family == "convolutional":
+            code = ConvCode(fec.get("K", 7),
+                            tuple(fec.get("generators", (0o171, 0o133))))
+            return conv_encode(bits, code, terminate=False), {
+                "K": code.K, "rate": "1/2",
+                "generators_octal": [oct(g) for g in code.generators]}
+        if family == "ldpc":
+            from ..fec.ldpc import LDPCCode
+            code = LDPCCode(fec.get("n", 256), fec.get("k", 128),
+                            fec.get("seed", 1))
+            return code.encode(bits), {"n": code.n, "k": code.k,
+                                       "seed": code.seed,
+                                       "rate": f"{code.k}/{code.n}"}
+        if family == "reed_solomon":
+            rs = RSCode(fec.get("n", 255), fec.get("k", 223),
+                        fcr=fec.get("fcr", 1), generator=fec.get("generator", 2))
+            data = np.packbits(bits)
+            k = rs.k
+            pad = (-len(data)) % k
+            data = np.concatenate([data, np.zeros(pad, dtype=np.uint8)])
+            cws = [rs.encode(bytes(data[i:i + k])) for i in range(0, len(data), k)]
+            return (np.unpackbits(np.frombuffer(b"".join(cws), dtype=np.uint8)),
+                    {"n": rs.n, "k": rs.k, "fcr": rs.fcr})
+        return bits, {}
+
     # ---------------- full stack ------------------------------------------
     def generate(self, modulation: str = "QPSK", sps: float = 8.0,
                  rolloff: float = 0.35, snr_db: float = 30.0,
@@ -96,35 +146,10 @@ class WaveformFactory:
         gt.payloads = payloads
         gt.info_bits = info_bits.tolist()
 
-        bits = info_bits
         # FEC
-        fec = fec or {"family": "none"}
-        gt.fec = dict(fec)
-        if fec["family"] == "convolutional":
-            code = ConvCode(fec.get("K", 7),
-                            tuple(fec.get("generators", (0o171, 0o133))))
-            bits = conv_encode(bits, code, terminate=False)
-            gt.fec.update({"K": code.K,
-                           "generators_octal": [oct(g) for g in code.generators],
-                           "rate": "1/2"})
-        elif fec["family"] == "ldpc":
-            from .. import fec as _fecpkg
-            from ..fec.ldpc import LDPCCode
-            code = LDPCCode(fec.get("n", 256), fec.get("k", 128),
-                            fec.get("seed", 1))
-            bits = code.encode(bits)
-            gt.fec.update({"n": code.n, "k": code.k, "seed": code.seed,
-                           "rate": f"{code.k}/{code.n}"})
-        elif fec["family"] == "reed_solomon":
-            rs = RSCode(fec.get("n", 255), fec.get("k", 223),
-                        fcr=fec.get("fcr", 1), generator=fec.get("generator", 2))
-            data = np.packbits(bits)
-            k = rs.k
-            pad = (-len(data)) % k
-            data = np.concatenate([data, np.zeros(pad, dtype=np.uint8)])
-            cws = [rs.encode(bytes(data[i:i + k])) for i in range(0, len(data), k)]
-            bits = np.unpackbits(np.frombuffer(b"".join(cws), dtype=np.uint8))
-            gt.fec.update({"n": rs.n, "k": rs.k, "fcr": rs.fcr})
+        gt.fec = dict(fec or {"family": "none"})
+        bits, info = self._encode_fec(info_bits, gt.fec)
+        gt.fec.update(info)
         gt.coded_bits_len = len(bits)
 
         # interleave
@@ -137,6 +162,9 @@ class WaveformFactory:
         elif interleaver["kind"] == "helical":
             bits = helical_interleave(bits, interleaver["rows"],
                                       interleaver["cols"], interleaver["step"])
+        elif interleaver["kind"] == "ieee80211":
+            bits = pn_interleave(bits, ieee80211_permutation(
+                interleaver["ncbps"], interleaver["nbpsc"]))
         elif interleaver["kind"] == "pseudo_random":
             perm = self.rng.permutation(interleaver.get("period", 128))
             bits = pn_interleave(bits, perm)
@@ -175,7 +203,7 @@ class WaveformFactory:
             gt.fsk_deviation_norm = 0.25 / sps * 2
         elif modulation == "OFDM":
             iq = self._ofdm(bits, n_fft=64, cp=16)
-            gt.fec = dict(fec)
+            gt.fec = dict(fec or {"family": "none"})
             gt.frame["note"] = "OFDM: QPSK subcarriers, N_FFT 64, CP 16"
         elif modulation in ("FM", "AM-DSB-WC", "AM-DSB-SC",
                             "AM-SSB-WC", "AM-SSB-SC"):
@@ -202,6 +230,10 @@ class WaveformFactory:
                                   impair.get("iq_phase_deg", 0))
         if impair.get("multipath_taps"):
             iq = imp.multipath(iq, np.array(impair["multipath_taps"]))
+        if impair.get("cfo_drift_norm"):
+            iq = imp.cfo_drift(iq, impair["cfo_drift_norm"])
+        if impair.get("interferer"):
+            iq = imp.cw_interferer(iq, **impair["interferer"])
         iq = imp.awgn(iq, snr_db, self.rng)
         if impair.get("dc_offset"):
             iq = imp.dc_offset(iq, impair["dc_offset"])
