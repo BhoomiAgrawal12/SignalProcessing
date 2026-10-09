@@ -23,8 +23,6 @@ from .conv import ConvCode, STANDARD_CODES, viterbi_decode, conv_encode
 from .rs import RSCode, bits_to_symbols
 from .ldpc import identify_ldpc
 
-VERSION = 2
-
 
 def _conv_syndrome_rate(bits: np.ndarray, g1: int, g2: int, K: int,
                         offset: int) -> float:
@@ -139,8 +137,9 @@ def identify_rs(bits: np.ndarray, candidates: list,
     return hits
 
 
-def identify_fec(bits: np.ndarray, config, llrs: np.ndarray = None,
-                 try_rs: bool = True, try_ldpc: bool = True) -> list:
+def identify_fec(bits: np.ndarray, config,
+                 try_rs: bool = True, try_ldpc: bool = True,
+                 try_conv: bool = True) -> list:
     """Full FEC identification: returns ranked FECHypothesis list, always
     ending with an explicit 'none' hypothesis."""
     bits = np.asarray(bits, dtype=np.uint8)
@@ -149,7 +148,7 @@ def identify_fec(bits: np.ndarray, config, llrs: np.ndarray = None,
     conv_hits = identify_convolutional(
         bits, tuple(config.conv_constraint_lengths),
         config.conv_exhaustive_max_k, config.max_test_bits,
-        min_rate=config.min_syndrome_zero_rate)
+        min_rate=config.min_syndrome_zero_rate) if try_conv else []
     for hit in conv_hits[:3]:
         code = ConvCode(hit["K"], (hit["g1"], hit["g2"]))
         raw = bits[hit["offset"]:]
@@ -189,8 +188,8 @@ def identify_fec(bits: np.ndarray, config, llrs: np.ndarray = None,
             score=hit["syndrome_zero_rate"] * (1.0 - min(1.0, 2 * pre_ber))))
 
     # The RS alignment sweep is the expensive part of this stage; a
-    # confident convolutional hit makes it redundant (concatenated codes
-    # are handled by re-running identification on the decoded stream).
+    # confident convolutional hit makes it redundant here (an RS outer code
+    # is looked for in the Viterbi output by identify_outer).
     best_conv = conv_hits[0]["syndrome_zero_rate"] if conv_hits else 0.0
     rs_hits = [] if (best_conv > 0.9 or not try_rs) else \
         identify_rs(bits, config.rs_candidates)
@@ -237,6 +236,27 @@ def identify_fec(bits: np.ndarray, config, llrs: np.ndarray = None,
                                           if not hyps else "fallback"}))
     hyps.sort(key=lambda h: -h.score)
     return hyps
+
+
+def identify_outer(inner: FECHypothesis, config) -> FECHypothesis:
+    """Concatenated codes: look for an RS outer code in the inner decoder's
+    output. Returns a 'concatenated' hypothesis, or `inner` unchanged.
+    An interleaver between the two codes is not searched for."""
+    dec = inner.decoded_bits
+    if dec is None or len(dec) < 2 * 255 * 8:
+        return inner
+    outer = identify_fec(dec, config, try_conv=False, try_ldpc=False)[0]
+    if outer.family != "reed_solomon" or \
+            (outer.syndrome_zero_rate or 0) < config.min_syndrome_zero_rate:
+        return inner
+    return FECHypothesis(
+        family="concatenated", code_rate=inner.code_rate * outer.code_rate,
+        parameters={"inner": {"family": inner.family, **inner.parameters},
+                    "outer": {"family": outer.family, **outer.parameters}},
+        syndrome_zero_rate=min(inner.syndrome_zero_rate,
+                               outer.syndrome_zero_rate),
+        decoded_bits=outer.decoded_bits, pre_fec_ber=inner.pre_fec_ber,
+        score=inner.score)
 
 
 def _rs_decode_stream(bits: np.ndarray, rs: RSCode, bit_off: int,

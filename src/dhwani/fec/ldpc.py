@@ -1,10 +1,10 @@
 """LDPC support: candidate-set identification plus bit-flipping decode.
 
 Blind reconstruction of an arbitrary sparse parity-check matrix from a
-noisy stream is research-grade (report S9: "identify LDPC codes from a
-candidate set of known standards rather than reconstructing an arbitrary
-H from scratch - say this openly"). This module therefore implements the
-professional candidate-set approach:
+noisy stream is research-grade, so LDPC codes are identified from a
+candidate set of known matrices rather than by reconstructing an
+arbitrary H, and the result says so. This module implements that
+candidate-set approach:
 
 * LDPCCode builds a systematic code H = [P | I_m] with a sparse,
   deterministic P (seeded), so the encoder, the factory, and the
@@ -20,7 +20,6 @@ candidate list by loading their H into LDPCCode.from_parity_check.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 
 import numpy as np
 
