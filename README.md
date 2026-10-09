@@ -42,6 +42,11 @@ CRC-16/CCITT, plus AWGN, carrier and phase offset, writes it to a raw
 `.iq` file, analyses it blind and prints PASS/FAIL for every element of
 that chain (exit status 1 on any miss).
 
+The same chain ships as `web/demo/demo_chain.wav` (stereo 16-bit I/Q, 1 MS/s
+in the header, synthetic): the "Load demo" button in `dhwani-gui` runs the full S0-S12 chain on it,
+`web/analyze.html` has a matching button for the browser S0-S5 preview, and
+`web/viewer.html?demo=1` shows its analysis.
+
 ## Installation
 
 Requires Python 3.11+ (3.12 recommended).

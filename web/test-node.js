@@ -37,6 +37,7 @@ const cases = [
   ["bpsk_u8.iq", "BPSK", {}],
   ["fsk2_mono.wav", "2FSK", {}],
   ["fsk2_4sps.iq", "2FSK", {}],
+  ["../../web/demo/demo_chain.wav", "QPSK", {}],   // the shared demo (scripts/make_demo_report.py)
 ];
 
 let pass = 0;
