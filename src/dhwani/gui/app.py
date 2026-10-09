@@ -1,8 +1,8 @@
-"""rf-analyzer analyst GUI (PyQt6 + PyQtGraph).
+"""Dhwani analyst GUI (PyQt6 + PyQtGraph).
 
 Single window, left rail navigation, all analysis in a worker thread so
-the UI never freezes. Uses exactly the same RFAnalyzer engine as the CLI.
-Run with:  python -m rfanalyzer.gui.app  (or rf-analyzer-gui)
+the UI never freezes. Uses exactly the same Analyzer engine as the CLI.
+Run with:  python -m dhwani.gui.app  (or dhwani-gui)
 """
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ import traceback
 
 import numpy as np
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
-    QGroupBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout,
+    QGroupBox, QHBoxLayout, QLabel, QListWidget,
     QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout,
     QWidget, QLineEdit, QInputDialog)
@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
 import pyqtgraph as pg
 
 from ..common.config import load_config
-from ..pipeline import RFAnalyzer
+from ..pipeline import Analyzer
 
 pg.setConfigOptions(antialias=False, background="k", foreground="w")
 
@@ -81,14 +81,14 @@ def _fill_table(t: QTableWidget, rows, headers):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("rf-analyzer - blind SDR signal analysis")
+        self.setWindowTitle("Dhwani - blind SDR signal analysis")
         self.resize(1400, 860)
         self.config = load_config()
         ckpt = os.path.join(os.path.dirname(__file__), "..", "..", "..",
                             "ml", "cvnet_rf", "checkpoints", "real_best.pt")
         if os.path.exists(ckpt):
             self.config.modulation.cvnet_checkpoint = os.path.abspath(ckpt)
-        self.analyzer = RFAnalyzer(self.config)
+        self.analyzer = Analyzer(self.config)
         self.result = None
         self.worker = None
         self.file_path = None
@@ -144,6 +144,12 @@ class MainWindow(QMainWindow):
         form.addRow("Sample rate", self.in_rate)
         form.addRow("Centre frequency", self.in_cf)
         form.addRow("Raw IQ datatype", self.in_dtype)
+        # no network unless the analyst opts in: unchecking lets CVNet-RF
+        # download its pinned checkpoint when none is present locally
+        self.chk_offline = QCheckBox("Offline: skip the CVNet-RF engine")
+        self.chk_offline.setChecked(
+            not self.config.modulation.cvnet_checkpoint)
+        form.addRow("ML engine", self.chk_offline)
         lay.addWidget(form_box)
 
         self.btn_analyze = QPushButton("Run full analysis")
@@ -264,6 +270,11 @@ class MainWindow(QMainWindow):
         self.entropy_plot.setLabel("bottom", "bit position in frame")
         self.entropy_plot.setLabel("left", "entropy (bits)")
         lay.addWidget(self.entropy_plot, 2)
+        self.ac_plot = pg.PlotWidget(
+            title="Bit-stream autocorrelation (peaks mark the frame period)")
+        self.ac_plot.setLabel("bottom", "lag (bits)")
+        self.ac_plot.setLabel("left", "fraction of equal bits")
+        lay.addWidget(self.ac_plot, 2)
         self.tbl_frames = QTableWidget()
         lay.addWidget(QLabel("Frame structure"))
         lay.addWidget(self.tbl_frames, 1)
@@ -272,6 +283,11 @@ class MainWindow(QMainWindow):
         self.txt_hex.setFont(QFont("Menlo", 10))
         lay.addWidget(QLabel("Payload (hex / ASCII)"))
         lay.addWidget(self.txt_hex, 2)
+        self.txt_intel = QPlainTextEdit()
+        self.txt_intel.setReadOnly(True)
+        lay.addWidget(QLabel("S11 payload intelligence (findings capped by "
+                             "provenance)"))
+        lay.addWidget(self.txt_intel, 2)
         self.stack.addWidget(page)
 
     def _build_report_page(self):
@@ -290,6 +306,9 @@ class MainWindow(QMainWindow):
         self.txt_summary.setFont(QFont("Menlo", 11))
         lay.addWidget(QLabel("Analysis summary"))
         lay.addWidget(self.txt_summary, 1)
+        self.tbl_trace = QTableWidget()
+        lay.addWidget(QLabel("Pipeline trace (S0-S12)"))
+        lay.addWidget(self.tbl_trace, 1)
         self.stack.addWidget(page)
 
     # --------------------------------------------------------- actions
@@ -308,7 +327,8 @@ class MainWindow(QMainWindow):
         self.overrides = {}
 
     def _analysis_kwargs(self):
-        kw = {"overrides": dict(self.overrides)}
+        kw = {"overrides": dict(self.overrides),
+              "no_ml": self.chk_offline.isChecked()}
         if self.in_rate.text().strip():
             kw["sample_rate"] = float(self.in_rate.text())
         if self.in_cf.text().strip():
@@ -413,6 +433,10 @@ class MainWindow(QMainWindow):
         if wf and wf.get("db"):
             img = np.array(wf["db"], dtype=np.float32)
             self.wf_img.setImage(img.T, autoLevels=True)
+            # map pixels onto the axis labels: x in normalised frequency
+            # (same span as the PSD), y in time blocks
+            f = wf.get("freq_norm") or [-0.5, 0.5]
+            self.wf_img.setRect(f[0], 0, f[-1] - f[0], img.shape[0])
         # signals table
         segs = d.get("segments", [])
         _fill_table(self.tbl_signals,
@@ -497,7 +521,7 @@ class MainWindow(QMainWindow):
                          s.get("score")])
         il = d.get("interleaver")
         if il:
-            rows.append(["interleaver", il.get("kind"),
+            rows.append(["interleaver", il.get("label") or il.get("kind"),
                          str(il.get("parameters")), il.get("score")])
         f = d.get("fec")
         if f:
@@ -544,8 +568,35 @@ class MainWindow(QMainWindow):
             self.txt_hex.setPlainText("\n".join(lines) + extra)
         else:
             self.txt_hex.setPlainText("no payload recovered")
+        self.ac_plot.clear()
+        ac = plots.get("bit_autocorr")
+        if ac:
+            self.ac_plot.plot(list(range(1, len(ac))), ac[1:],
+                              pen=pg.mkPen("#4fc3f7", width=1))
+        self.txt_intel.setPlainText(self._intel_text(
+            d.get("payload_intelligence") or {}))
+        _fill_table(self.tbl_trace,
+                    [[t.get("stage"), t.get("title"), t.get("status"),
+                      t.get("summary"), t.get("elapsed_s")]
+                     for t in d.get("pipeline_trace") or []],
+                    ["stage", "title", "status", "summary", "s"])
         # summary
         self.txt_summary.setPlainText(self._summary_text(d))
+
+    @staticmethod
+    def _intel_text(pi):
+        if not pi.get("available"):
+            return pi.get("reason") or "not available"
+        s = pi.get("summary") or {}
+        lines = [f"{s.get('classification')} ({s.get('strength')}, "
+                 f"confidence {s.get('confidence')}); trust {s.get('trust')}",
+                 ""]
+        for f in pi.get("findings", []):
+            lines.append(f"[{f.get('strength')}] {f.get('category')}: "
+                         f"{f.get('verdict')} ({f.get('confidence')})")
+            lines.extend(f"    - {e}" for e in f.get("evidence", [])[:3])
+        lines.extend(f"limitation: {l}" for l in pi.get("limitations", []))
+        return "\n".join(lines)
 
     def _summary_text(self, d):
         lines = [f"run {d.get('run_id')}",
@@ -555,13 +606,15 @@ class MainWindow(QMainWindow):
         lines.append(f"modulation: {m.get('prediction')} "
                      f"(confidence {m.get('confidence')})")
         lines.append(f"SNR: {p.get('snr_db')} dB | symbol rate: "
-                     f"{p.get('symbol_rate_norm')} normalised"
+                     f"{p.get('symbol_rate_norm_recording') or p.get('symbol_rate_norm')} "
+                     "symbols/recorded sample"
                      + (f" = {p.get('symbol_rate_hz'):.0f} Bd"
                         if p.get("symbol_rate_hz") else ""))
         s = d.get("scrambler") or {}
         lines.append(f"scrambler: {s.get('kind')} {s.get('name', '')}")
         il = d.get("interleaver") or {}
-        lines.append(f"interleaver: {il.get('kind')} {il.get('parameters')}")
+        lines.append(f"interleaver: {il.get('label') or il.get('kind')} "
+                     f"{il.get('parameters')}")
         f = d.get("fec") or {}
         lines.append(f"FEC: {f.get('family')} {f.get('parameters')} "
                      f"syndrome-zero-rate {f.get('syndrome_zero_rate')}")
