@@ -59,6 +59,23 @@ def test_gui_analysis_flow(qtbot, tmp_path):
     assert "analyst override" in win.result.modulation.constraints_applied
 
 
+def test_gui_demo_button(qtbot):
+    """The "Load demo" button selects the shipped WAV; the sample rate
+    comes from its header and the full chain is recovered."""
+    from dhwani.gui.app import DEMO_WAV, MainWindow
+    win = MainWindow()
+    qtbot.addWidget(win)
+    assert win.btn_demo.isEnabled()
+    win._on_progress("bitlayer", 0.0)
+    assert "minute" in win.status_bar.currentMessage()
+    win.btn_demo.click()
+    assert win.file_path == DEMO_WAV and win.btn_analyze.isEnabled()
+    res = _run(qtbot, win)
+    assert res.recording_meta["sample_rate"] == 1_000_000
+    assert res.modulation.prediction == "QPSK"
+    assert "CRC-16-CCITT-FALSE" in win.txt_summary.toPlainText()
+
+
 def test_gui_screenshots_script(tmp_path):
     """R8: one PNG per page, non-trivial in size."""
     import sys
