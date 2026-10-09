@@ -1,6 +1,6 @@
 """Stage S5 driver: physical pre-checks -> two engines -> fusion voter.
 
-Order of authority (report S5 'Fusion'):
+Order of authority:
 1. Hard physical constraints from S4 (FSK tone histogram, OFDM detection,
    constant-envelope test) can exclude classes outright.
 2. Cumulant engine (explainable, no training data).
@@ -27,6 +27,11 @@ _LINEAR_FAMILIES = ("psk", "oqpsk", "qam", "apsk", "ask")
 # tables, so they must always get a hearing
 _TRIAL_FALLBACK = ["BPSK", "QPSK", "8PSK", "16QAM", "64QAM",
                    "4ASK", "16APSK"]
+# M-PSK points sit on the 2M-PSK grid, so a 2M-PSK receiver also locks on
+# M-PSK data at the same EVM; the lower order is trialled against it and
+# wins when it explains the symbols as well (true 2M-PSK data fails the
+# M-PSK trial: about twice the EVM)
+_NESTED = {"32PSK": "16PSK", "16PSK": "8PSK", "8PSK": "QPSK"}
 
 
 def _occupancy(symbols, candidate) -> float:
@@ -344,6 +349,31 @@ def classify_modulation(x: np.ndarray, params, config) -> ModulationHypothesis:
                 best = max(trial_detail, key=_sc) if trial_detail else None
                 if best is not None and _sc(best) >= 2.0:
                     break
+        while best in _NESTED and _NESTED[best] in classes and \
+                _NESTED[best] not in trial_detail:
+            sub = _NESTED[best]
+            t_sub = trial_detail[sub] = _trial_one(xs, sub, sps, demod_cfg)
+            t_best = trial_detail[best]
+            if not (t_sub and t_sub["score"] is not None and
+                    t_sub["evm"] <= 1.05 * t_best["evm"]):
+                break
+            constraints.append(f"{sub} explains the symbols as well as "
+                               f"{best} (EVM {t_sub['evm']}% vs "
+                               f"{t_best['evm']}%): fewer points preferred")
+            best = sub
+        # OOK and BPSK share one bipolar table after S1, so the trial ties
+        # on EVM and only OOK's looser gate separates them: name BPSK
+        # whenever it passes its own trial.
+        # ponytail: OOK is named only when BPSK fails; add an on/off
+        # envelope test when a real OOK capture needs the name
+        if best == "OOK" and "BPSK" in classes:
+            if "BPSK" not in trial_detail:
+                trial_detail["BPSK"] = _trial_one(xs, "BPSK", sps, demod_cfg)
+            if _sc("BPSK") >= 0.8:
+                constraints.append("OOK and BPSK share one bipolar "
+                                   "constellation after DC removal: BPSK "
+                                   "named, OOK kept as the alternative")
+                best = "BPSK"
         if best is not None and _sc(best) >= 0.8:
             if best != top:
                 t_best = trial_detail[best]
@@ -361,7 +391,8 @@ def classify_modulation(x: np.ndarray, params, config) -> ModulationHypothesis:
             # trial detail but must not dilute the winner below the
             # UNKNOWN cutoff by sheer headcount
             scored = sorted((c for c in trial_detail if _sc(c) >= 0.8),
-                            key=lambda c: (-_sc(c), -fused.get(c, 0.0)))
+                            key=lambda c: (c != best, -_sc(c),
+                                           -fused.get(c, 0.0)))
             exps_t = {c: float(np.exp(_sc(c))) for c in scored}
             z_t = sum(exps_t.values())
             trial_probs = {c: min(0.95, exps_t[c] / z_t) for c in scored}
