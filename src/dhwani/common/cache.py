@@ -1,8 +1,8 @@
 """Disk cache for expensive stage results.
 
 Key = (recording content hash, stage name, stage version, parameter hash).
-Bump a stage's VERSION constant whenever its algorithm changes to invalidate
-old entries.
+Only S2 detection is cached: bump pipeline.STAGE_VERSION whenever S0-S2
+behaviour changes to invalidate old entries.
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import hashlib
 import json
 import os
 import pickle
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 import numpy as np
 
@@ -65,10 +65,3 @@ class StageCache:
                 pickle.dump(value, f, protocol=pickle.HIGHEST_PROTOCOL)
         except Exception:
             pass
-
-    def get_or_compute(self, key: str, fn: Callable[[], Any]) -> Any:
-        v = self.get(key)
-        if v is None:
-            v = fn()
-            self.put(key, v)
-        return v
