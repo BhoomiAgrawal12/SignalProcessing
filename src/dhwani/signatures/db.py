@@ -1,14 +1,13 @@
-"""Local SQLite signature library (report §21 / stage S10c).
+"""Local SQLite signature library.
 
-Every solved signal can be stored; new analyses are matched against the
-library so known waveforms are identified instantly."""
+Solved signals can be saved (CLI --save-signature, GUI) and listed. New
+analyses are not matched against it."""
 from __future__ import annotations
 
 import json
 import os
 import sqlite3
 import time
-from typing import Optional
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS signatures (
@@ -55,6 +54,7 @@ class SignatureDB:
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (name, time.time(),
              (r.get("modulation") or {}).get("prediction"),
+             params.get("symbol_rate_norm_recording") or
              params.get("symbol_rate_norm"), params.get("obw99_norm"),
              fec.get("family"), json.dumps(fec.get("parameters", {})),
              il.get("kind"), json.dumps(il.get("parameters", {})),
@@ -64,40 +64,6 @@ class SignatureDB:
              notes))
         self.conn.commit()
         return cur.lastrowid
-
-    def match(self, modulation: str = None, symbol_rate_norm: float = None,
-              sync_word_hex: str = None, tolerance: float = 0.02) -> list:
-        """Score all stored signatures against the observed features."""
-        rows = self.conn.execute(
-            "SELECT id, name, modulation, symbol_rate_norm, sync_word_hex,"
-            " fec_family, interleaver_kind, frame_length_bits, crc_name"
-            " FROM signatures").fetchall()
-        hits = []
-        for (sid, name, mod, rs, sync, fec, il, fl, crc) in rows:
-            score, n_features = 0.0, 0
-            if modulation and mod:
-                n_features += 1
-                score += 1.0 if modulation == mod else 0.0
-            if symbol_rate_norm and rs:
-                n_features += 1
-                if abs(symbol_rate_norm - rs) / rs < tolerance:
-                    score += 1.0
-            if sync_word_hex and sync:
-                n_features += 1
-                if sync_word_hex.startswith(sync[:4]) or \
-                        sync.startswith(sync_word_hex[:4]):
-                    score += 2.0
-                    n_features += 1
-            if n_features:
-                hits.append({"id": sid, "name": name,
-                             "score": round(score / n_features, 3),
-                             "modulation": mod, "symbol_rate_norm": rs,
-                             "sync_word_hex": sync, "fec_family": fec,
-                             "interleaver_kind": il,
-                             "frame_length_bits": fl, "crc_name": crc})
-        hits = [h for h in hits if h["score"] > 0.5]
-        hits.sort(key=lambda h: -h["score"])
-        return hits
 
     def list_all(self) -> list:
         rows = self.conn.execute(
