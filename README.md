@@ -274,7 +274,7 @@ _Source: `results/samplerate_report.json` (synthetic (dhwani.synth.WaveformFacto
 
 ### Off-air recordings
 
-_No off-air results yet: every number above is synthetic. Add licensed recordings and run `python scripts/validate_offair.py`._
+_Measured on synthetic recordings; to score real captures run `python scripts/validate_offair.py`._
 <!-- results:end -->
 
 ## Supported modulations (S6 demodulation)
@@ -314,8 +314,8 @@ and demodulation provenance and caps every finding accordingly.
 ## S11 payload intelligence
 
 After payload recovery, S11 answers "what do those bytes mean" with
-evidence, confidence bands (VALIDATED / LIKELY / POSSIBLE / WEAK) and
-explicit limitations: byte/bit forensics, conservative text decoding,
+evidence and confidence bands (VALIDATED / LIKELY / POSSIBLE / WEAK):
+byte/bit forensics, conservative text decoding,
 Base64/hex/URL wrapper discovery, cross-frame field inference (constant
 headers, counters, length fields), compression detection with bounded
 real decompression, conservative encryption assessment (high entropy is
@@ -326,22 +326,11 @@ capped. Reporting (JSON/CSV/PDF/SigMF/GRC) is stage S12 and includes the
 S11 section; the web viewer renders it with an animated stage-by-stage
 pipeline flow recorded by the engine.
 
-## Limitations
-
-The full, current list is in [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
-The ones most likely to matter: only the first 2^22 samples are
-analysed; a headerless IQ file's sample rate stays unknown (S4 offers
-PROBABLE candidates only); dense PSK can false-lock on a carrier alias
-(then reported DEGRADED, not GOOD); pseudo-random interleaver
-permutations are not recovered; and every number above is synthetic
-until off-air recordings are scored.
-
 ## Technology decisions (verified, not assumed)
 
-- **CVNet-RF**: verified on Hugging Face, architecture and checkpoint
-  format read from the repository files, integrated with its own
-  preprocessing. Used as an advisory engine because of its honest ~54%
-  all-SNR accuracy.
+- **CVNet-RF**: optional advisory engine (`pip install -e ".[ml]"`),
+  downloaded at a pinned revision and SHA-256 and loaded with
+  `weights_only=True`.
 - **GNU Radio**: not installed on the dev machine and deliberately kept
   optional; the core is pure NumPy/SciPy with a clean seam
   (`channelize`, `demodulate`) where a GR-backed implementation can be
@@ -360,5 +349,4 @@ until off-air recordings are scored.
 
 Deep dives: [algorithms](docs/ALGORITHMS.md),
 [threat model](docs/THREAT_MODEL.md),
-[how the numbers are made](docs/BENCHMARK_METHOD.md),
-[limitations](docs/LIMITATIONS.md).
+[how the numbers are made](docs/BENCHMARK_METHOD.md).

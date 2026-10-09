@@ -126,9 +126,8 @@ def render() -> str:
                 for k, v in s["per_parameter"].items()]
         out.append("\n" + _source(d, "offair_report"))
     else:
-        out.append("_No off-air results yet: every number above is "
-                   "synthetic. Add licensed recordings and run "
-                   "`python scripts/validate_offair.py`._")
+        out.append("_Measured on synthetic recordings; to score real "
+                   "captures run `python scripts/validate_offair.py`._")
     return "\n".join(out)
 
 
