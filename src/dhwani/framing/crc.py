@@ -3,11 +3,14 @@ staged CRC hunter.
 
 The hunter is deliberately bounded: it tests the configured candidate list
 over plausible (data_start, crc_position) pairs rather than brute-forcing
-the full parameter space (report §19: staged candidate pruning).
+the full parameter space (staged candidate pruning).
 """
 from __future__ import annotations
 
 import numpy as np
+
+
+from functools import lru_cache
 
 
 def _reflect(v: int, width: int) -> int:
@@ -18,18 +21,42 @@ def _reflect(v: int, width: int) -> int:
     return r
 
 
+_REFLECT8 = [_reflect(b, 8) for b in range(256)]
+
+
+@lru_cache(maxsize=None)
+def _crc_table(width: int, poly: int) -> tuple:
+    """Byte-wise MSB-first lookup table (the CRC hunt calls crc_compute
+    hundreds of thousands of times; bit loops dominated the bit layer)."""
+    top, mask = 1 << (width - 1), (1 << width) - 1
+    table = []
+    for i in range(256):
+        crc = i << (width - 8)
+        for _ in range(8):
+            crc = ((crc << 1) ^ poly) if crc & top else (crc << 1)
+        table.append(crc & mask)
+    return tuple(table)
+
+
 def crc_compute(data: bytes, width: int, poly: int, init: int,
                 refin: bool, refout: bool, xorout: int) -> int:
     crc = init
-    topbit = 1 << (width - 1)
     mask = (1 << width) - 1
-    for byte in data:
-        if refin:
-            byte = _reflect(byte, 8)
-        crc ^= byte << (width - 8) if width >= 8 else byte
-        for _ in range(8):
-            crc = ((crc << 1) ^ poly) if (crc & topbit) else (crc << 1)
-            crc &= mask
+    if width >= 8:
+        table, shift = _crc_table(width, poly), width - 8
+        for byte in data:
+            if refin:
+                byte = _REFLECT8[byte]
+            crc = ((crc << 8) & mask) ^ table[((crc >> shift) ^ byte) & 0xFF]
+    else:
+        topbit = 1 << (width - 1)
+        for byte in data:
+            if refin:
+                byte = _REFLECT8[byte]
+            crc ^= byte
+            for _ in range(8):
+                crc = ((crc << 1) ^ poly) if (crc & topbit) else (crc << 1)
+                crc &= mask
     if refout:
         crc = _reflect(crc, width)
     return crc ^ xorout
@@ -42,11 +69,6 @@ CRC_PRESETS = [
     {"name": "CRC-32", "width": 32, "poly": 0x04C11DB7, "init": 0xFFFFFFFF, "refin": True, "refout": True, "xorout": 0xFFFFFFFF},
     {"name": "CRC-8", "width": 8, "poly": 0x07, "init": 0x00, "refin": False, "refout": False, "xorout": 0x00},
 ]
-
-
-def bits_to_bytes(bits: np.ndarray) -> bytes:
-    n = (len(bits) // 8) * 8
-    return np.packbits(np.asarray(bits[:n], dtype=np.uint8)).tobytes()
 
 
 def crc_hunt(frames: np.ndarray, candidates: list = None,
@@ -76,7 +98,12 @@ def crc_hunt(frames: np.ndarray, candidates: list = None,
             for start in range(0, min(crc_pos, 8)):
                 passes = 0
                 total = min(n_frames, 64)
+                # stop once min_pass_fraction is out of reach
+                need = int(np.ceil(total * min_pass_fraction - 1e-9))
+                max_fail = total - need
                 for f in range(total):
+                    if f - passes > max_fail:
+                        break
                     row = as_bytes[f]
                     calc = crc_compute(row[start:crc_pos].tobytes(),
                                        cand["width"], cand["poly"], cand["init"],

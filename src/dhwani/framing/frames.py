@@ -2,7 +2,6 @@
 mapping and payload statistics (stage S10)."""
 from __future__ import annotations
 
-import math
 
 import numpy as np
 
@@ -17,7 +16,6 @@ def binary_autocorrelation(bits: np.ndarray, max_lag: int,
     Random data -> 0.5; peaks mark the frame period."""
     bits = np.asarray(bits[:max_bits], dtype=np.uint8)
     n = len(bits)
-    packed = pack_bits(bits)
     out = np.zeros(max_lag + 1)
     out[0] = 1.0
     for tau in range(1, max_lag + 1):
