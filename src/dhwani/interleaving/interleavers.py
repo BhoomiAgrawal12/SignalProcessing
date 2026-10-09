@@ -65,6 +65,23 @@ def helical_deinterleave(bits: np.ndarray, rows: int, cols: int, step: int) -> n
     return m.reshape(len(m), -1).reshape(-1)
 
 
+# 802.11a/g OFDM modes: (coded bits per symbol, coded bits per subcarrier)
+IEEE80211_MODES = ((48, 1), (96, 2), (192, 4), (288, 6))
+
+
+def ieee80211_permutation(ncbps: int, nbpsc: int) -> np.ndarray:
+    """802.11a/g bit interleaver over one OFDM symbol (IEEE 802.11 OFDM PHY,
+    two-step permutation): k -> i = (N/16)(k mod 16) + floor(k/16) spreads
+    adjacent bits over non-adjacent subcarriers; i -> j = s*floor(i/s) +
+    (i + N - floor(16 i / N)) mod s, s = max(nbpsc/2, 1), alternates bit
+    significance. Returned in pn_interleave's convention (out[p] = in[perm[p]])."""
+    k = np.arange(ncbps)
+    i = (ncbps // 16) * (k % 16) + k // 16
+    s = max(nbpsc // 2, 1)
+    j = s * (i // s) + (i + ncbps - (16 * i) // ncbps) % s
+    return np.argsort(j)
+
+
 def pn_interleave(bits: np.ndarray, permutation: np.ndarray) -> np.ndarray:
     P = len(permutation)
     n = (len(bits) // P) * P
