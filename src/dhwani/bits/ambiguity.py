@@ -23,31 +23,43 @@ def enumerate_ambiguities(symbols: np.ndarray, modulation: str,
     (x differential decode)."""
     if modulation not in CONSTELLATIONS or symbols is None or len(symbols) == 0:
         return []
-    table, _k = CONSTELLATIONS[modulation]
-    order = len(table)
     # a blind carrier loop can lock at ANY rotation in the constellation's
     # actual symmetry group (M for M-PSK, 4 for square QAM, 8 for these
     # 128APSK rings) - enumerating fewer leaves unrecoverable locks
     from ..demod.constellations import symmetry_order
     n_rot = symmetry_order(modulation)
+    # OQPSK: the receiver can pair each I with either neighbouring symbol's
+    # Q (bits intact but misaligned; a 90-degree lock swaps which side), so
+    # both re-paired streams are offered too
+    pairings = [("as received", symbols)]
+    if modulation == "OQPSK":
+        pairings += [("Q from next symbol",
+                      symbols.real + 1j * np.roll(symbols.imag, -1)),
+                     ("Q from previous symbol",
+                      symbols.real + 1j * np.roll(symbols.imag, 1))]
     # keep the fan-out bounded: differential variants are dropped first
-    # for high-order PSK where rotations alone exhaust the budget
-    if n_rot * 2 * 2 > max_streams:
+    # for high-order PSK (and OQPSK's three pairings) where rotations alone
+    # exhaust the budget
+    # ponytail: no differential OQPSK, raise max_ambiguity_streams if one shows up
+    if n_rot * 2 * 2 * len(pairings) > max_streams:
         include_differential = False
     streams = []
     noise_var = max(1e-4, float(np.var(np.abs(symbols)) * 0.5))
-    for conj in (False, True):
-        base = np.conj(symbols) if conj else symbols
-        for r in range(n_rot):
-            rot = base * np.exp(2j * np.pi * r / n_rot)
-            hard, llrs, _ = slice_symbols(rot, modulation, noise_var)
-            hyp = {"rotation": f"{r}/{n_rot} turn", "iq_swap": conj,
-                   "differential": False}
-            streams.append(BitStream(bits=hard, llrs=llrs, hypothesis=hyp))
-            if include_differential:
-                streams.append(BitStream(
-                    bits=_differential_decode(hard),
-                    hypothesis={**hyp, "differential": True}))
-            if len(streams) >= max_streams:
-                return streams
+    for pairing, syms in pairings:
+        for conj in (False, True):
+            base = np.conj(syms) if conj else syms
+            for r in range(n_rot):
+                rot = base * np.exp(2j * np.pi * r / n_rot)
+                hard, llrs, _ = slice_symbols(rot, modulation, noise_var)
+                hyp = {"rotation": f"{r}/{n_rot} turn", "iq_swap": conj,
+                       "differential": False}
+                if len(pairings) > 1:
+                    hyp["stagger_pairing"] = pairing
+                streams.append(BitStream(bits=hard, llrs=llrs, hypothesis=hyp))
+                if include_differential:
+                    streams.append(BitStream(
+                        bits=_differential_decode(hard),
+                        hypothesis={**hyp, "differential": True}))
+                if len(streams) >= max_streams:
+                    return streams
     return streams
