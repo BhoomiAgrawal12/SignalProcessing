@@ -39,7 +39,6 @@ def detect_signals(x: np.ndarray, config, sample_rate=None) -> tuple:
 
     labels, n = ndimage.label(mask)
     segments = []
-    hop = wf["hop"]
     noise_lin = 10 ** (floor / 10)
     for i, sl in enumerate(ndimage.find_objects(labels)):
         if sl is None:
