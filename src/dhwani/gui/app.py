@@ -28,6 +28,10 @@ from ..pipeline import Analyzer
 
 pg.setConfigOptions(antialias=False, background="k", foreground="w")
 
+DEMO_WAV = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "web", "demo",
+    "demo_chain.wav"))
+
 PAGES = ["Load & Inspect", "Spectrum & Waterfall", "Parameters",
          "Modulation", "Demodulation", "Bit Layer", "Frames & Payload",
          "Report & Export"]
@@ -126,8 +130,14 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         self.btn_open = QPushButton("Open recording...")
         self.btn_open.clicked.connect(self._open_file)
+        self.btn_demo = QPushButton("Load demo")
+        self.btn_demo.clicked.connect(self._load_demo)
+        self.btn_demo.setEnabled(os.path.exists(DEMO_WAV))
+        self.btn_demo.setToolTip("Synthetic QPSK + FEC recording (web/demo/"
+                                 "demo_chain.wav in a repository checkout)")
         self.lbl_file = QLabel("no file loaded")
         row.addWidget(self.btn_open)
+        row.addWidget(self.btn_demo)
         row.addWidget(self.lbl_file, 1)
         lay.addLayout(row)
 
@@ -319,8 +329,13 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(
             self, "Open recording", "",
             "Recordings (*.iq *.wav *.sigmf-data *.bin *.raw);;All files (*)")
-        if not path:
-            return
+        if path:
+            self._set_file(path)
+
+    def _load_demo(self):
+        self._set_file(DEMO_WAV)
+
+    def _set_file(self, path):
         self.file_path = path
         self.lbl_file.setText(path)
         self.btn_analyze.setEnabled(True)
@@ -355,7 +370,11 @@ class MainWindow(QMainWindow):
                   "modulation", "demodulate", "ambiguity", "bitlayer"]
         base = stages.index(stage) if stage in stages else 0
         self.progress.setValue(int(100 * (base + frac) / len(stages)))
-        self.status_bar.showMessage(f"stage: {stage}")
+        msg = f"stage: {stage}"
+        if stage == "bitlayer":     # reports once per candidate, can be slow
+            msg += (f" ({int(100 * frac)}% of candidate streams tried; "
+                    "this stage can take a minute or two)")
+        self.status_bar.showMessage(msg)
 
     def _on_error(self, tb):
         self.btn_analyze.setEnabled(True)
