@@ -1,7 +1,7 @@
 """Bit packing utilities: 64 bits per uint64 word.
 
 All GF(2) heavy lifting in this project runs on packed words - a ~64x
-speed-up over per-bit arithmetic (report §5 S8 implementation notes).
+speed-up over per-bit arithmetic.
 Bit i of the stream maps to bit (i % 64) of word (i // 64), LSB-first.
 """
 from __future__ import annotations
