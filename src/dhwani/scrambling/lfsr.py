@@ -41,7 +41,7 @@ def additive_scramble(bits: np.ndarray, poly: int, seed: int) -> np.ndarray:
     return (np.asarray(bits, dtype=np.uint8) ^ seq).astype(np.uint8)
 
 
-# Common whitening sequences seen in real waveforms (report S7c).
+# Common whitening sequences seen in real waveforms.
 KNOWN_WHITENERS = {
     "PN9-CC1101": {"poly": 0x221, "seed": 0x1FF, "degree": 9},
     "CCSDS":      {"poly": 0x1A9, "seed": 0xFF,  "degree": 8},   # x^8+x^7+x^5+x^3+1
