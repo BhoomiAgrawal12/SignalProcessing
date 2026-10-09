@@ -118,7 +118,14 @@ def test_e2e_ieee80211_interleaver(tmp_path, config):
     """R3: 16QAM + conv K=7 behind the 802.11a/g bit interleaver (192
     coded bits per symbol, 4 per subcarrier): identified by name, CRC ok.
     Unwhitened: a whitener after this interleaver is the open R2 coupling
-    (its phase alignment needs a period the permutation hides)."""
+    (its phase alignment needs a period the permutation hides).
+
+    The search reaches the right node late (118 s on a 4-core x86 laptop,
+    over the 90 s default budget, which then reports the stop in a
+    warning), so this correctness test lifts the budget."""
+    import copy
+    config = copy.deepcopy(config)
+    config.bitlayer.time_budget_s = 600.0
     res, gt = _run(tmp_path, config, dict(
         modulation="16QAM", sps=8.0, snr_db=25.0, cfo_norm=0.004,
         phase_offset=0.3,
@@ -187,7 +194,9 @@ def test_uncoded_crc_chain_exits_early(tmp_path, config):
         modulation="BPSK", sps=8.0, snr_db=18.0, cfo_norm=0.004,
         n_frames=80))
     assert res.frames is not None and res.frames.crc["pass_fraction"] > 0.9
-    assert res.stage_timings["S8_S10_bitlayer"] < 30
+    # exits after the first validated node (3 explored); the old behaviour
+    # went through all 40. Counting nodes does not depend on CPU speed.
+    assert len(res.hypotheses) < 10
 
 
 def test_search_budget_is_reported(tmp_path, config):
