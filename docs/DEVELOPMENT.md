@@ -44,7 +44,8 @@ python scripts/render_readme.py        # CI runs it with --check
 Each file carries a provenance block (time, command, commit, CPU,
 versions, data label). Never edit a result file or the README results
 block by hand. `python scripts/make_demo_report.py` regenerates
-`web/demo/analysis.json`.
+`web/demo/demo_chain.wav` and `web/demo/analysis.json` (the analysis of
+that same file).
 
 ## Rules worth knowing
 

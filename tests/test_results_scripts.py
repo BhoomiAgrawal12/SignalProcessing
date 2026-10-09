@@ -218,3 +218,21 @@ def test_offair_scores_sample_rate_applied_or_candidate():
     assert hit["all_correct"]
     assert hit["sample_rate_source"] == "candidates (not applied)"
     assert not vo.score(e, Stub(None, [96000]), True)["all_correct"]
+
+
+def test_demo_wav_matches_its_seed(tmp_path):
+    """The committed examples/demo_chain.wav is what make_demo_report.py
+    regenerates (within 1 LSB), so the demo cannot drift from the code."""
+    import wave
+    import numpy as np
+    import make_demo_report as mdr
+    fresh = str(tmp_path / "demo_chain.wav")
+    mdr.make_wav(fresh)
+
+    def read(path):
+        with wave.open(path) as w:
+            assert (w.getnchannels(), w.getframerate()) == (2, mdr.SAMPLE_RATE)
+            return np.frombuffer(w.readframes(w.getnframes()), np.int16)
+    a, b = read(fresh), read(mdr.WAV)
+    assert a.shape == b.shape
+    assert np.abs(a.astype(int) - b).max() <= 1
