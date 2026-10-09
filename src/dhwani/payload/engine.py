@@ -13,7 +13,7 @@ from .compression_detector import detect_compression
 from .encoding_detector import detect_encodings
 from .encryption_assessor import assess_encryption
 from .message_reconstruction import reconstruct_messages
-from .models import Finding, confidence_band
+from .models import confidence_band
 from .protocol_fingerprint import fingerprint_protocols
 from .structure_detector import discover_structure
 from .text_decoder import try_text_decodings
