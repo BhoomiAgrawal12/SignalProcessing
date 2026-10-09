@@ -34,7 +34,7 @@ request (`demo/analysis.json`).
   written and read only by Dhwani; a cache directory shared with an
   untrusted user would be a code-execution path, so keep it private.
 
-## Known gaps
+## Notes
 
 - The `.grc` flowgraph is a starting point the analyst runs in GNU
   Radio; it is never executed here.
